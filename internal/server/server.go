@@ -17,6 +17,7 @@ import (
 
 type GalleryServer struct {
 	rootDir string
+	srv     *http.Server
 }
 
 func New(rootDir string) (*GalleryServer, error) {
@@ -25,6 +26,22 @@ func New(rootDir string) (*GalleryServer, error) {
 		return nil, fmt.Errorf("invalid root directory: %w", err)
 	}
 	return &GalleryServer{rootDir: absPath}, nil
+}
+
+func (s *GalleryServer) SetServer(srv *http.Server) {
+	s.srv = srv
+}
+
+func (s *GalleryServer) HandleShutdown(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "shutting_down"})
+
+	// Shutdown the server gracefully
+	go func() {
+		if s.srv != nil {
+			s.srv.Close()
+		}
+	}()
 }
 
 func (s *GalleryServer) RootDir() string {
