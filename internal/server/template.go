@@ -395,7 +395,8 @@ const HTMLTemplate = `<!DOCTYPE html>
                 const isMedia = file.isImage || file.isVideo;
                 let previewHtml;
                 if (file.isImage) {
-                    previewHtml = '<img src="' + imgUrl + '" loading="lazy" alt="' + file.name + '">';
+                    const thumbUrl = '/thumb/' + encodePath(file.path);
+                    previewHtml = '<img src="' + thumbUrl + '" loading="lazy" alt="' + file.name + '">';
                 } else if (file.isVideo) {
                     previewHtml = '<video src="' + videoUrl + '" preload="metadata" muted></video>' +
                         '<div class="video-overlay"><div class="play-icon">▶</div></div>';

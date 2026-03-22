@@ -179,7 +179,7 @@ func (s *GalleryServer) HandleRaw(w http.ResponseWriter, r *http.Request) {
 
 func (s *GalleryServer) HandleThumb(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/thumb/")
-	s.serveFile(w, r, path)
+	s.ServeThumbnail(w, r, path)
 }
 
 func (s *GalleryServer) serveFile(w http.ResponseWriter, r *http.Request, path string) {
