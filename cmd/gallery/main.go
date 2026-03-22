@@ -4,9 +4,34 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
+	"runtime"
+	"time"
 
 	"gallery/internal/server"
 )
+
+func openBrowser(url string) error {
+	var cmd string
+	var args []string
+
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = "open"
+	case "windows":
+		cmd = "rundll32"
+		args = []string{"url.dll,FileProtocolHandler", url}
+	default:
+		cmd = "xdg-open"
+		args = []string{url}
+	}
+
+	if len(args) == 0 {
+		args = []string{url}
+	}
+
+	return exec.Command(cmd, args...).Start()
+}
 
 func main() {
 	rootDir := "."
@@ -32,9 +57,19 @@ func main() {
 		port = p
 	}
 
-	fmt.Printf("🖼️  Galleria avviata su http://localhost:%s\n", port)
+	url := fmt.Sprintf("http://localhost:%s", port)
+
+	fmt.Printf("🖼️  Galleria avviata su %s\n", url)
 	fmt.Printf("📁 Cartella: %s\n", gallery.RootDir())
 	fmt.Println("Premi Ctrl+C per uscire")
+
+	// Open browser after a short delay to ensure server is ready
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		if err := openBrowser(url); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️  Impossibile aprire il browser: %v\n", err)
+		}
+	}()
 
 	if err := http.ListenAndServe(":"+port, nil); err != nil {
 		fmt.Fprintf(os.Stderr, "Errore server: %v\n", err)
