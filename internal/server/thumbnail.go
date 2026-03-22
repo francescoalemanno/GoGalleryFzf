@@ -11,20 +11,20 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/nfnt/resize"
+	"golang.org/x/image/draw"
 )
 
 const (
-	thumbWidth  = 400
-	thumbHeight = 300
+	thumbWidth   = 400
+	thumbHeight  = 300
 	maxCacheSize = 100 // Maximum number of cached thumbnails in memory
 )
 
 // ThumbnailCache manages cached thumbnails
 type ThumbnailCache struct {
-	mu     sync.RWMutex
-	cache  map[string][]byte
-	order  []string // LRU tracking
+	mu    sync.RWMutex
+	cache map[string][]byte
+	order []string // LRU tracking
 }
 
 var thumbCache = &ThumbnailCache{
@@ -77,24 +77,28 @@ func generateThumbnail(imgPath string) ([]byte, error) {
 
 	// Resize maintaining aspect ratio
 	bounds := img.Bounds()
-	width := uint(bounds.Dx())
-	height := uint(bounds.Dy())
+	width := bounds.Dx()
+	height := bounds.Dy()
 
 	// Calculate new dimensions preserving aspect ratio
-	var newWidth, newHeight uint
+	var newWidth, newHeight int
 	if width*thumbHeight > height*thumbWidth {
 		// Width is the limiting factor
 		newWidth = thumbWidth
-		newHeight = uint(height * thumbWidth / width)
+		newHeight = height * thumbWidth / width
 	} else {
 		// Height is the limiting factor
 		newHeight = thumbHeight
-		newWidth = uint(width * thumbHeight / height)
+		newWidth = width * thumbHeight / height
 	}
 
-	resized := resize.Resize(newWidth, newHeight, img, resize.Lanczos3)
+	// Create new image with calculated dimensions
+	dst := image.NewRGBA(image.Rect(0, 0, newWidth, newHeight))
 
-	// Encode to JPEG for smaller size using temp file
+	// Use Catmull-Rom for high quality downsampling
+	draw.CatmullRom.Scale(dst, dst.Bounds(), img, bounds, draw.Over, nil)
+
+	// Encode to JPEG for smaller size
 	tempFile, err := os.CreateTemp("", "thumb-*.jpg")
 	if err != nil {
 		return nil, err
@@ -102,7 +106,7 @@ func generateThumbnail(imgPath string) ([]byte, error) {
 	defer os.Remove(tempFile.Name())
 	defer tempFile.Close()
 
-	err = jpeg.Encode(tempFile, resized, &jpeg.Options{Quality: 85})
+	err = jpeg.Encode(tempFile, dst, &jpeg.Options{Quality: 85})
 	if err != nil {
 		return nil, err
 	}
@@ -155,11 +159,10 @@ func (s *GalleryServer) ServeThumbnail(w http.ResponseWriter, r *http.Request, p
 	w.Write(data)
 }
 
-// ThumbnailEncoder encodes thumbnail with proper format
+// encodeThumbnail encodes image with proper format
 func encodeThumbnail(img image.Image, ext string) ([]byte, error) {
 	switch ext {
 	case ".png":
-		// Use temp file for PNG
 		tempFile, err := os.CreateTemp("", "thumb-*.png")
 		if err != nil {
 			return nil, err
