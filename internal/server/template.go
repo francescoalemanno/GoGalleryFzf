@@ -97,6 +97,7 @@ const HTMLTemplate = `<!DOCTYPE html>
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
             gap: 1.5rem;
+            min-height: 200px;
         }
         .gallery-item {
             background: rgba(255,255,255,0.05);
@@ -105,6 +106,11 @@ const HTMLTemplate = `<!DOCTYPE html>
             transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             cursor: pointer;
             border: 1px solid rgba(255,255,255,0.08);
+            animation: fadeIn 0.3s ease-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
         }
         .gallery-item:hover {
             transform: translateY(-5px) scale(1.02);
@@ -266,12 +272,14 @@ const HTMLTemplate = `<!DOCTYPE html>
             text-align: center;
             padding: 5rem 2rem;
             color: #666;
+            grid-column: 1 / -1;
         }
         .empty-state .icon { font-size: 5rem; margin-bottom: 1rem; opacity: 0.5; }
         .loading {
             display: flex;
             justify-content: center;
             padding: 3rem;
+            grid-column: 1 / -1;
         }
         .spinner {
             width: 50px; height: 50px;
@@ -281,6 +289,45 @@ const HTMLTemplate = `<!DOCTYPE html>
             animation: spin 1s linear infinite;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
+        .load-more-container {
+            grid-column: 1 / -1;
+            display: flex;
+            justify-content: center;
+            padding: 2rem;
+        }
+        .load-more-btn {
+            background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+            border: none;
+            color: #fff;
+            padding: 1rem 2rem;
+            border-radius: 30px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .load-more-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(0,212,255,0.3);
+        }
+        .load-more-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .pagination-info {
+            grid-column: 1 / -1;
+            text-align: center;
+            color: #888;
+            font-size: 0.9rem;
+            padding: 1rem;
+        }
+        .sentinel {
+            height: 20px;
+            grid-column: 1 / -1;
+        }
         @media (max-width: 768px) {
             .header { padding: 0.8rem 1rem; }
             .header h1 { font-size: 1.2rem; }
@@ -316,6 +363,7 @@ const HTMLTemplate = `<!DOCTYPE html>
         <div class="gallery" id="gallery">
             <div class="loading"><div class="spinner"></div></div>
         </div>
+        <div class="sentinel" id="sentinel"></div>
     </div>
     <div class="lightbox" id="lightbox">
         <div class="lightbox-content">
@@ -336,7 +384,11 @@ const HTMLTemplate = `<!DOCTYPE html>
             files: [],
             media: [],
             currentMediaIndex: 0,
-            searchQuery: ''
+            searchQuery: '',
+            currentPage: 1,
+            hasMore: false,
+            isLoading: false,
+            totalFiles: 0
         };
         const elements = {
             gallery: document.getElementById('gallery'),
@@ -344,6 +396,7 @@ const HTMLTemplate = `<!DOCTYPE html>
             folderSelect: document.getElementById('folderSelect'),
             searchInput: document.getElementById('searchInput'),
             stats: document.getElementById('stats'),
+            sentinel: document.getElementById('sentinel'),
             lightbox: document.getElementById('lightbox'),
             lightboxMedia: document.getElementById('lightboxMedia'),
             lightboxFilename: document.getElementById('lightboxFilename'),
@@ -353,22 +406,66 @@ const HTMLTemplate = `<!DOCTYPE html>
             lightboxPrev: document.getElementById('lightboxPrev'),
             lightboxNext: document.getElementById('lightboxNext')
         };
-        async function loadFiles(folder = '.', search = '') {
-            elements.gallery.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+
+        // Intersection Observer for infinite scroll
+        const observer = new IntersectionObserver((entries) => {
+            if (entries[0].isIntersecting && state.hasMore && !state.isLoading) {
+                loadMore();
+            }
+        }, { rootMargin: '200px' });
+
+        async function loadFiles(folder = '.', search = '', page = 1, append = false) {
+            if (!append) {
+                state.currentPage = 1;
+                state.files = [];
+                state.media = [];
+                elements.gallery.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+            }
+            
+            state.isLoading = true;
+            
             try {
                 let url = search 
-                    ? '/api/search?q=' + encodeURIComponent(search) + '&folder=' + encodeURIComponent(folder)
-                    : '/api/files?folder=' + encodeURIComponent(folder);
+                    ? '/api/search?q=' + encodeURIComponent(search) + '&folder=' + encodeURIComponent(folder) + '&page=' + page + '&limit=100'
+                    : '/api/files?folder=' + encodeURIComponent(folder) + '&page=' + page + '&limit=100';
                 const response = await fetch(url);
-                state.files = await response.json();
+                const data = await response.json();
+                
+                if (!append) {
+                    state.files = data.files;
+                    elements.gallery.innerHTML = '';
+                } else {
+                    state.files = state.files.concat(data.files);
+                }
+                
                 state.media = state.files.filter(f => f.isImage || f.isVideo);
-                renderGallery();
+                state.hasMore = data.hasMore;
+                state.totalFiles = data.total;
+                state.currentPage = data.page;
+                
+                appendGallery(data.files, append);
                 updateBreadcrumb(folder);
-                updateStats();
+                updateStats(data);
+                
+                // Observe sentinel for infinite scroll
+                if (elements.sentinel) {
+                    observer.observe(elements.sentinel);
+                }
             } catch (err) {
-                elements.gallery.innerHTML = '<div class="empty-state"><div class="icon">⚠️</div><p>Errore caricamento</p></div>';
+                if (!append) {
+                    elements.gallery.innerHTML = '<div class="empty-state"><div class="icon">⚠️</div><p>Errore caricamento</p></div>';
+                }
+                console.error('Errore:', err);
+            } finally {
+                state.isLoading = false;
             }
         }
+
+        async function loadMore() {
+            if (state.isLoading || !state.hasMore) return;
+            await loadFiles(state.currentFolder, state.searchQuery, state.currentPage + 1, true);
+        }
+
         async function loadFolders() {
             try {
                 const response = await fetch('/api/folders?folder=.');
@@ -382,51 +479,60 @@ const HTMLTemplate = `<!DOCTYPE html>
                 });
             } catch (err) { console.error('Errore:', err); }
         }
-        function renderGallery() {
-            if (state.files.length === 0) {
+
+        function createGalleryItem(file) {
+            const icon = file.isDir ? '📁' : getFileIcon(file.ext);
+            const size = formatSize(file.size);
+            const isMedia = file.isImage || file.isVideo;
+            let previewHtml;
+            if (file.isImage) {
+                const thumbUrl = '/thumb/' + encodePath(file.path);
+                previewHtml = '<img src="' + thumbUrl + '" loading="lazy" alt="' + file.name + '">';
+            } else if (file.isVideo) {
+                const videoUrl = '/raw/' + encodePath(file.path);
+                previewHtml = '<video src="' + videoUrl + '" preload="metadata" muted></video>' +
+                    '<div class="video-overlay"><div class="play-icon">▶</div></div>';
+            } else {
+                previewHtml = '<span class="item-icon">' + icon + '</span>';
+            }
+            const div = document.createElement('div');
+            div.className = 'gallery-item ' + (file.isDir ? 'folder' : '') + ' ' + (file.isVideo ? 'video' : '');
+            div.dataset.path = file.path;
+            div.dataset.isdir = file.isDir;
+            div.dataset.ismedia = isMedia;
+            div.innerHTML = '<div class="item-preview">' + previewHtml + '</div>' +
+                '<div class="item-info">' +
+                '<div class="item-name" title="' + file.name + '">' + file.name + '</div>' +
+                '<div class="item-meta"><span>' + (file.isDir ? 'Cartella' : (file.isVideo ? '🎬 ' + size : size)) + '</span><span>' + formatDate(file.modTime) + '</span></div>' +
+                '</div>';
+            div.addEventListener('click', () => {
+                if (file.isDir) {
+                    state.currentFolder = file.path;
+                    elements.folderSelect.value = file.path;
+                    state.searchQuery = '';
+                    elements.searchInput.value = '';
+                    loadFiles(file.path);
+                } else if (isMedia) {
+                    openLightbox(file.path);
+                }
+            });
+            return div;
+        }
+
+        function appendGallery(files, append) {
+            if (!append && files.length === 0) {
                 elements.gallery.innerHTML = '<div class="empty-state"><div class="icon">📂</div><p>Nessun file trovato</p></div>';
                 return;
             }
-            elements.gallery.innerHTML = state.files.map(file => {
-                const icon = file.isDir ? '📁' : getFileIcon(file.ext);
-                const size = formatSize(file.size);
-                const imgUrl = file.isImage ? '/raw/' + encodePath(file.path) : '';
-                const videoUrl = file.isVideo ? '/raw/' + encodePath(file.path) : '';
-                const isMedia = file.isImage || file.isVideo;
-                let previewHtml;
-                if (file.isImage) {
-                    const thumbUrl = '/thumb/' + encodePath(file.path);
-                    previewHtml = '<img src="' + thumbUrl + '" loading="lazy" alt="' + file.name + '">';
-                } else if (file.isVideo) {
-                    previewHtml = '<video src="' + videoUrl + '" preload="metadata" muted></video>' +
-                        '<div class="video-overlay"><div class="play-icon">▶</div></div>';
-                } else {
-                    previewHtml = '<span class="item-icon">' + icon + '</span>';
-                }
-                return '<div class="gallery-item ' + (file.isDir ? 'folder' : '') + ' ' + (file.isVideo ? 'video' : '') + '" data-path="' + file.path + '" data-isdir="' + file.isDir + '" data-ismedia="' + isMedia + '">' +
-                    '<div class="item-preview">' + previewHtml + '</div>' +
-                    '<div class="item-info">' +
-                    '<div class="item-name" title="' + file.name + '">' + file.name + '</div>' +
-                    '<div class="item-meta"><span>' + (file.isDir ? 'Cartella' : (file.isVideo ? '🎬 ' + size : size)) + '</span><span>' + formatDate(file.modTime) + '</span></div>' +
-                    '</div></div>';
-            }).join('');
-            document.querySelectorAll('.gallery-item').forEach(item => {
-                item.addEventListener('click', () => {
-                    const isDir = item.dataset.isdir === 'true';
-                    const isMedia = item.dataset.ismedia === 'true';
-                    const path = item.dataset.path;
-                    if (isDir) {
-                        state.currentFolder = path;
-                        elements.folderSelect.value = path;
-                        state.searchQuery = '';
-                        elements.searchInput.value = '';
-                        loadFiles(path);
-                    } else if (isMedia) {
-                        openLightbox(path);
-                    }
-                });
+
+            const fragment = document.createDocumentFragment();
+            files.forEach(file => {
+                fragment.appendChild(createGalleryItem(file));
             });
+            
+            elements.gallery.appendChild(fragment);
         }
+
         function openLightbox(path) {
             const index = state.media.findIndex(m => m.path === path);
             if (index === -1) return;
@@ -435,6 +541,7 @@ const HTMLTemplate = `<!DOCTYPE html>
             elements.lightbox.classList.add('active');
             document.body.style.overflow = 'hidden';
         }
+
         function showMedia(index) {
             const media = state.media[index];
             const mediaUrl = '/raw/' + encodePath(media.path);
@@ -458,20 +565,24 @@ const HTMLTemplate = `<!DOCTYPE html>
             elements.lightboxFilename.textContent = media.name;
             elements.lightboxCounter.textContent = (index + 1) + ' / ' + state.media.length + (media.isVideo ? ' 🎬' : ' 🖼️');
         }
+
         function closeLightbox() {
             const video = elements.lightboxMedia.querySelector('video');
             if (video) video.pause();
             elements.lightbox.classList.remove('active');
             document.body.style.overflow = '';
         }
+
         function nextMedia() {
             state.currentMediaIndex = (state.currentMediaIndex + 1) % state.media.length;
             showMedia(state.currentMediaIndex);
         }
+
         function prevMedia() {
             state.currentMediaIndex = (state.currentMediaIndex - 1 + state.media.length) % state.media.length;
             showMedia(state.currentMediaIndex);
         }
+
         function updateBreadcrumb(folder) {
             if (folder === '.') {
                 elements.breadcrumb.innerHTML = '<a href="#" data-folder=".">🏠 Home</a>';
@@ -495,21 +606,24 @@ const HTMLTemplate = `<!DOCTYPE html>
                 });
             });
         }
-        function updateStats() {
-            const images = state.files.filter(f => f.isImage).length;
-            const videos = state.files.filter(f => f.isVideo).length;
-            const folders = state.files.filter(f => f.isDir).length;
-            const others = state.files.length - images - videos - folders;
-            let text = state.files.length + ' elementi';
-            if (images) text += ' • ' + images + ' 🖼️';
-            if (videos) text += ' • ' + videos + ' 🎬';
-            if (folders) text += ' • ' + folders + ' 📁';
-            if (others) text += ' • ' + others + ' 📄';
+
+        function updateStats(data) {
+            const showing = state.files.length;
+            const total = data.total;
+            const page = data.page;
+            const totalPages = data.totalPages;
+            
+            let text = showing + ' / ' + total + ' elementi';
+            if (totalPages > 1) {
+                text += ' (pagina ' + page + ' di ' + totalPages + ')';
+            }
             elements.stats.textContent = text;
         }
+
         function encodePath(path) {
             return path.split('/').map(encodeURIComponent).join('/');
         }
+
         function getFileIcon(ext) {
             const icons = {
                 '.jpg': '🖼️', '.jpeg': '🖼️', '.png': '🖼️', '.gif': '🖼️', '.webp': '🖼️',
@@ -522,6 +636,7 @@ const HTMLTemplate = `<!DOCTYPE html>
             };
             return icons[ext] || '📄';
         }
+
         function formatSize(bytes) {
             if (bytes === 0) return '0 B';
             const k = 1024;
@@ -529,15 +644,18 @@ const HTMLTemplate = `<!DOCTYPE html>
             const i = Math.floor(Math.log(bytes) / Math.log(k));
             return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
         }
+
         function formatDate(dateStr) {
             return new Date(dateStr).toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric' });
         }
+
         elements.folderSelect.addEventListener('change', () => {
             state.currentFolder = elements.folderSelect.value;
             state.searchQuery = '';
             elements.searchInput.value = '';
             loadFiles(state.currentFolder);
         });
+
         let searchTimeout;
         elements.searchInput.addEventListener('input', (e) => {
             clearTimeout(searchTimeout);
@@ -546,6 +664,7 @@ const HTMLTemplate = `<!DOCTYPE html>
                 loadFiles(state.currentFolder, state.searchQuery);
             }, 300);
         });
+
         elements.lightboxClose.addEventListener('click', closeLightbox);
         elements.lightboxNext.addEventListener('click', (e) => { e.stopPropagation(); nextMedia(); });
         elements.lightboxPrev.addEventListener('click', (e) => { e.stopPropagation(); prevMedia(); });
@@ -565,6 +684,7 @@ const HTMLTemplate = `<!DOCTYPE html>
                 video.paused ? video.play() : video.pause();
             }
         });
+
         loadFolders();
         loadFiles();
     </script>

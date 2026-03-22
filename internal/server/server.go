@@ -9,11 +9,14 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gallery/internal/fzf"
 	"gallery/internal/models"
 )
+
+const DefaultPageSize = 100
 
 type GalleryServer struct {
 	rootDir string
@@ -58,11 +61,62 @@ func (s *GalleryServer) HandleIndex(w http.ResponseWriter, r *http.Request) {
 	tmpl.Execute(w, nil)
 }
 
+func parsePagination(r *http.Request) (page, limit int) {
+	pageStr := r.URL.Query().Get("page")
+	limitStr := r.URL.Query().Get("limit")
+
+	page, _ = strconv.Atoi(pageStr)
+	if page < 1 {
+		page = 1
+	}
+
+	limit, _ = strconv.Atoi(limitStr)
+	if limit < 1 || limit > 500 {
+		limit = DefaultPageSize
+	}
+
+	return page, limit
+}
+
+func paginateFiles(files []models.FileInfo, page, limit int) models.PaginatedResponse {
+	total := len(files)
+	totalPages := (total + limit - 1) / limit
+	if totalPages < 1 {
+		totalPages = 1
+	}
+
+	start := (page - 1) * limit
+	end := start + limit
+
+	if start > total {
+		start = total
+	}
+	if end > total {
+		end = total
+	}
+
+	var paginated []models.FileInfo
+	if start < total {
+		paginated = files[start:end]
+	}
+
+	return models.PaginatedResponse{
+		Files:      paginated,
+		Total:      total,
+		Page:       page,
+		Limit:      limit,
+		HasMore:    end < total,
+		TotalPages: totalPages,
+	}
+}
+
 func (s *GalleryServer) HandleFiles(w http.ResponseWriter, r *http.Request) {
 	folder := r.URL.Query().Get("folder")
 	if folder == "" {
 		folder = "."
 	}
+
+	page, limit := parsePagination(r)
 
 	cleanPath := filepath.Clean(folder)
 	fullPath := filepath.Join(s.rootDir, cleanPath)
@@ -78,8 +132,10 @@ func (s *GalleryServer) HandleFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	response := paginateFiles(files, page, limit)
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(files)
+	json.NewEncoder(w).Encode(response)
 }
 
 func (s *GalleryServer) HandleSearch(w http.ResponseWriter, r *http.Request) {
@@ -88,6 +144,8 @@ func (s *GalleryServer) HandleSearch(w http.ResponseWriter, r *http.Request) {
 	if folder == "" {
 		folder = "."
 	}
+
+	page, limit := parsePagination(r)
 
 	cleanPath := filepath.Clean(folder)
 	fullPath := filepath.Join(s.rootDir, cleanPath)
@@ -130,8 +188,10 @@ func (s *GalleryServer) HandleSearch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	response := paginateFiles(results, page, limit)
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(results)
+	json.NewEncoder(w).Encode(response)
 }
 
 func (s *GalleryServer) HandleFolders(w http.ResponseWriter, r *http.Request) {
