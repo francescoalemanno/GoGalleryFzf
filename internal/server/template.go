@@ -77,21 +77,52 @@ const HTMLTemplate = `<!DOCTYPE html>
         }
         .breadcrumb {
             display: flex;
-            gap: 0.5rem;
+            gap: 0.3rem;
             margin-bottom: 1.5rem;
             flex-wrap: wrap;
             align-items: center;
+            padding: 0.5rem 1rem;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.05);
         }
         .breadcrumb a {
             color: #00d4ff;
             text-decoration: none;
-            padding: 0.3rem 0.8rem;
+            padding: 0.4rem 0.8rem;
             background: rgba(0, 212, 255, 0.1);
-            border-radius: 20px;
+            border-radius: 8px;
             font-size: 0.9rem;
             transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 0.3rem;
         }
-        .breadcrumb a:hover { background: rgba(0, 212, 255, 0.2); }
+        .breadcrumb a:hover { 
+            background: rgba(0, 212, 255, 0.25);
+            transform: translateY(-1px);
+        }
+        .breadcrumb a:first-child {
+            background: linear-gradient(135deg, rgba(0, 212, 255, 0.2), rgba(123, 44, 191, 0.2));
+            font-weight: 500;
+        }
+        .breadcrumb a:first-child:hover {
+            background: linear-gradient(135deg, rgba(0, 212, 255, 0.3), rgba(123, 44, 191, 0.3));
+        }
+        .breadcrumb .sep { 
+            color: #666; 
+            padding: 0 0.2rem;
+            font-size: 0.8rem;
+        }
+        .breadcrumb .parent-nav {
+            margin-left: auto;
+            background: rgba(255, 255, 255, 0.08) !important;
+            color: #aaa !important;
+        }
+        .breadcrumb .parent-nav:hover {
+            background: rgba(255, 255, 255, 0.15) !important;
+            color: #fff !important;
+        }
         .breadcrumb .sep { color: #666; }
         .gallery {
             display: grid;
@@ -195,6 +226,14 @@ const HTMLTemplate = `<!DOCTYPE html>
             display: flex;
             justify-content: space-between;
         }
+        .item-dir {
+            font-size: 0.7rem;
+            color: #666;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            margin-bottom: 0.2rem;
+        }
         .lightbox {
             display: none;
             position: fixed;
@@ -262,6 +301,13 @@ const HTMLTemplate = `<!DOCTYPE html>
             color: #fff;
         }
         .lightbox-info .filename { font-size: 1rem; margin-bottom: 0.3rem; }
+        .lightbox-info .filepath {
+            font-size: 0.8rem;
+            color: #888;
+            margin-bottom: 0.3rem;
+            word-break: break-all;
+            max-width: 80vw;
+        }
         .lightbox-info .counter { font-size: 0.85rem; color: #888; }
         .video-controls-hint {
             font-size: 0.75rem;
@@ -373,6 +419,7 @@ const HTMLTemplate = `<!DOCTYPE html>
             <button class="lightbox-nav lightbox-next" id="lightboxNext">›</button>
             <div class="lightbox-info">
                 <div class="filename" id="lightboxFilename"></div>
+                <div class="filepath" id="lightboxFilepath"></div>
                 <div class="counter" id="lightboxCounter"></div>
                 <div class="video-controls-hint" id="videoHint"></div>
             </div>
@@ -390,6 +437,7 @@ const HTMLTemplate = `<!DOCTYPE html>
             isLoading: false,
             totalFiles: 0
         };
+        const mediaTypes = { image: 1, video: 1, audio: 1 };
         const elements = {
             gallery: document.getElementById('gallery'),
             breadcrumb: document.getElementById('breadcrumb'),
@@ -400,6 +448,7 @@ const HTMLTemplate = `<!DOCTYPE html>
             lightbox: document.getElementById('lightbox'),
             lightboxMedia: document.getElementById('lightboxMedia'),
             lightboxFilename: document.getElementById('lightboxFilename'),
+            lightboxFilepath: document.getElementById('lightboxFilepath'),
             lightboxCounter: document.getElementById('lightboxCounter'),
             videoHint: document.getElementById('videoHint'),
             lightboxClose: document.getElementById('lightboxClose'),
@@ -409,17 +458,34 @@ const HTMLTemplate = `<!DOCTYPE html>
 
         // Intersection Observer for infinite scroll
         const observer = new IntersectionObserver((entries) => {
-            if (entries[0].isIntersecting && state.hasMore && !state.isLoading) {
-                loadMore();
+            if (entries[0].isIntersecting && state.hasMore && !state.isLoading && !loadMoreTimeout) {
+                // Debounce: wait a bit to ensure we're really done scrolling
+                loadMoreTimeout = setTimeout(() => {
+                    loadMoreTimeout = null;
+                    if (state.hasMore && !state.isLoading) {
+                        loadMore();
+                    }
+                }, 100);
             }
         }, { rootMargin: '200px' });
+
+        // Track which files are already rendered to prevent duplicates
+        const renderedFiles = new Set();
+        // Track which page requests are in-flight to prevent duplicate requests
+        const loadingPages = new Set();
+        // Debounce timer for infinite scroll
+        let loadMoreTimeout = null;
 
         async function loadFiles(folder = '.', search = '', page = 1, append = false) {
             if (!append) {
                 state.currentPage = 1;
                 state.files = [];
                 state.media = [];
+                renderedFiles.clear(); // Clear tracking on fresh load
+                loadingPages.clear();  // Clear in-flight tracking
                 elements.gallery.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+                // Update breadcrumb immediately to show where we are
+                updateBreadcrumb(folder);
             }
             
             state.isLoading = true;
@@ -428,8 +494,19 @@ const HTMLTemplate = `<!DOCTYPE html>
                 let url = search 
                     ? '/api/search?q=' + encodeURIComponent(search) + '&folder=' + encodeURIComponent(folder) + '&page=' + page + '&limit=100'
                     : '/api/files?folder=' + encodeURIComponent(folder) + '&page=' + page + '&limit=100';
+                
                 const response = await fetch(url);
+                
+                if (!response.ok) {
+                    throw new Error('HTTP ' + response.status + ': ' + response.statusText);
+                }
+                
                 const data = await response.json();
+                
+                // Check if data is valid
+                if (!data || !Array.isArray(data.files)) {
+                    throw new Error('Invalid response data');
+                }
                 
                 if (!append) {
                     state.files = data.files;
@@ -438,32 +515,60 @@ const HTMLTemplate = `<!DOCTYPE html>
                     state.files = state.files.concat(data.files);
                 }
                 
-                state.media = state.files.filter(f => f.isImage || f.isVideo);
+                state.media = state.files.filter(f => f.isImage || f.isVideo || f.isAudio);
                 state.hasMore = data.hasMore;
                 state.totalFiles = data.total;
                 state.currentPage = data.page;
                 
-                appendGallery(data.files, append);
-                updateBreadcrumb(folder);
+                // Check if folder is truly empty (server returned no files)
+                if (data.files.length === 0) {
+                    appendGallery([], append);
+                } else {
+                    // Filter out any duplicates before appending
+                    const newFiles = append ? data.files.filter(f => !renderedFiles.has(f.path)) : data.files;
+                    
+                    // Track newly added files
+                    newFiles.forEach(f => renderedFiles.add(f.path));
+                    
+                    appendGallery(newFiles, append);
+                }
+                
                 updateStats(data);
                 
-                // Observe sentinel for infinite scroll
-                if (elements.sentinel) {
+                // Observe sentinel for infinite scroll (only once)
+                if (elements.sentinel && !append) {
                     observer.observe(elements.sentinel);
                 }
             } catch (err) {
                 if (!append) {
-                    elements.gallery.innerHTML = '<div class="empty-state"><div class="icon">⚠️</div><p>Errore caricamento</p></div>';
+                    elements.gallery.innerHTML = '<div class="empty-state"><div class="icon">⚠️</div><p>Errore caricamento: ' + escapeHtml(err.message) + '</p></div>';
                 }
-                console.error('Errore:', err);
+                console.error('Errore caricamento:', err);
             } finally {
                 state.isLoading = false;
             }
         }
 
         async function loadMore() {
+            // Prevent concurrent/duplicate requests with multiple guards
             if (state.isLoading || !state.hasMore) return;
-            await loadFiles(state.currentFolder, state.searchQuery, state.currentPage + 1, true);
+            
+            // Calculate next page
+            const nextPage = state.currentPage + 1;
+            
+            // Skip if this page is already being loaded
+            if (loadingPages.has(nextPage)) return;
+            
+            // Mark this page as loading
+            loadingPages.add(nextPage);
+            state.isLoading = true;
+            
+            try {
+                await loadFiles(state.currentFolder, state.searchQuery, nextPage, true);
+            } finally {
+                loadingPages.delete(nextPage);
+                state.isLoading = false;
+            }
         }
 
         async function loadFolders() {
@@ -483,7 +588,11 @@ const HTMLTemplate = `<!DOCTYPE html>
         function createGalleryItem(file) {
             const icon = file.isDir ? '📁' : getFileIcon(file.ext);
             const size = formatSize(file.size);
-            const isMedia = file.isImage || file.isVideo;
+            const isMedia = file.isImage || file.isVideo || file.isAudio;
+            // Extract directory path for display
+            const lastSlash = file.path.lastIndexOf('/');
+            const dirPath = lastSlash > 0 ? file.path.substring(0, lastSlash) : '';
+            const dirDisplay = dirPath ? '📂 ' + dirPath : '📂 root';
             let previewHtml;
             if (file.isImage) {
                 const thumbUrl = '/thumb/' + encodePath(file.path);
@@ -492,18 +601,21 @@ const HTMLTemplate = `<!DOCTYPE html>
                 const videoUrl = '/raw/' + encodePath(file.path);
                 previewHtml = '<video src="' + videoUrl + '" preload="metadata" muted></video>' +
                     '<div class="video-overlay"><div class="play-icon">▶</div></div>';
+            } else if (file.isAudio) {
+                previewHtml = '<span class="item-icon">🎵</span>';
             } else {
                 previewHtml = '<span class="item-icon">' + icon + '</span>';
             }
             const div = document.createElement('div');
-            div.className = 'gallery-item ' + (file.isDir ? 'folder' : '') + ' ' + (file.isVideo ? 'video' : '');
+            div.className = 'gallery-item ' + (file.isDir ? 'folder' : '') + ' ' + (file.isVideo ? 'video' : '') + ' ' + (file.isAudio ? 'audio' : '');
             div.dataset.path = file.path;
             div.dataset.isdir = file.isDir;
             div.dataset.ismedia = isMedia;
             div.innerHTML = '<div class="item-preview">' + previewHtml + '</div>' +
                 '<div class="item-info">' +
                 '<div class="item-name" title="' + file.name + '">' + file.name + '</div>' +
-                '<div class="item-meta"><span>' + (file.isDir ? 'Cartella' : (file.isVideo ? '🎬 ' + size : size)) + '</span><span>' + formatDate(file.modTime) + '</span></div>' +
+                (file.isDir ? '' : '<div class="item-dir" title="' + dirPath + '">' + dirDisplay + '</div>') +
+                '<div class="item-meta"><span>' + (file.isDir ? 'Cartella' : (file.isVideo ? '🎬 ' + size : (file.isAudio ? '🎵 ' + size : size))) + '</span><span>' + formatDate(file.modTime) + '</span></div>' +
                 '</div>';
             div.addEventListener('click', () => {
                 if (file.isDir) {
@@ -521,7 +633,7 @@ const HTMLTemplate = `<!DOCTYPE html>
 
         function appendGallery(files, append) {
             if (!append && files.length === 0) {
-                elements.gallery.innerHTML = '<div class="empty-state"><div class="icon">📂</div><p>Nessun file trovato</p></div>';
+                elements.gallery.innerHTML = '<div class="empty-state"><div class="icon">📂</div><p>Cartella vuota</p></div>';
                 return;
             }
 
@@ -555,6 +667,15 @@ const HTMLTemplate = `<!DOCTYPE html>
                 video.style.maxHeight = '85vh';
                 elements.lightboxMedia.appendChild(video);
                 elements.videoHint.textContent = 'Spazio per play/pause • ← → per navigare • ESC per chiudere';
+            } else if (media.isAudio) {
+                const audio = document.createElement('audio');
+                audio.src = mediaUrl;
+                audio.controls = true;
+                audio.autoplay = true;
+                audio.style.width = '100%';
+                audio.style.maxWidth = '600px';
+                elements.lightboxMedia.appendChild(audio);
+                elements.videoHint.textContent = 'Spazio per play/pause • ← → per navigare • ESC per chiudere';
             } else {
                 const img = document.createElement('img');
                 img.src = mediaUrl;
@@ -563,7 +684,9 @@ const HTMLTemplate = `<!DOCTYPE html>
                 elements.videoHint.textContent = '';
             }
             elements.lightboxFilename.textContent = media.name;
-            elements.lightboxCounter.textContent = (index + 1) + ' / ' + state.media.length + (media.isVideo ? ' 🎬' : ' 🖼️');
+            elements.lightboxFilepath.textContent = '📂 ' + media.path;
+            let mediaIcon = media.isVideo ? ' 🎬' : (media.isAudio ? ' 🎵' : ' 🖼️');
+            elements.lightboxCounter.textContent = (index + 1) + ' / ' + state.media.length + mediaIcon;
         }
 
         function closeLightbox() {
@@ -586,6 +709,7 @@ const HTMLTemplate = `<!DOCTYPE html>
         function updateBreadcrumb(folder) {
             if (folder === '.') {
                 elements.breadcrumb.innerHTML = '<a href="#" data-folder=".">🏠 Home</a>';
+                addBreadcrumbListeners();
                 return;
             }
             const parts = folder.split('/').filter(p => p);
@@ -593,18 +717,40 @@ const HTMLTemplate = `<!DOCTYPE html>
             let currentPath = '';
             parts.forEach(part => {
                 currentPath += (currentPath ? '/' : '') + part;
-                html += '<span class="sep">/</span><a href="#" data-folder="' + currentPath + '">' + part + '</a>';
+                html += '<span class="sep">›</span><a href="#" data-folder="' + encodePath(currentPath) + '">' + escapeHtml(part) + '</a>';
             });
+            
+            // Add "Parent" button to go up one level
+            const lastSlash = folder.lastIndexOf('/');
+            const parentFolder = lastSlash > 0 ? folder.substring(0, lastSlash) : '.';
+            html += '<span class="sep">|</span><a href="#" data-folder="' + encodePath(parentFolder) + '" class="parent-nav" title="Cartella superiore">⬆️ Parent</a>';
+            
             elements.breadcrumb.innerHTML = html;
+            addBreadcrumbListeners();
+        }
+
+        function addBreadcrumbListeners() {
             document.querySelectorAll('.breadcrumb a').forEach(link => {
                 link.addEventListener('click', (e) => {
                     e.preventDefault();
-                    const folder = link.dataset.folder;
+                    const folder = decodePath(link.dataset.folder);
                     state.currentFolder = folder;
                     elements.folderSelect.value = folder;
+                    state.searchQuery = '';
+                    elements.searchInput.value = '';
                     loadFiles(folder);
                 });
             });
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function decodePath(encodedPath) {
+            return encodedPath.split('/').map(decodeURIComponent).join('/');
         }
 
         function updateStats(data) {
