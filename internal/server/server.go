@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -95,7 +97,8 @@ func paginateFiles(files []models.FileInfo, page, limit int) models.PaginatedRes
 		end = total
 	}
 
-	var paginated []models.FileInfo
+	// Always return empty slice, never nil (for JSON array)
+	paginated := []models.FileInfo{}
 	if start < total {
 		paginated = files[start:end]
 	}
@@ -123,6 +126,17 @@ func (s *GalleryServer) HandleFiles(w http.ResponseWriter, r *http.Request) {
 
 	if !strings.HasPrefix(fullPath, s.rootDir) {
 		http.Error(w, "Accesso non consentito", http.StatusForbidden)
+		return
+	}
+
+	// Check if directory exists
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		http.Error(w, "Cartella non trovata", http.StatusNotFound)
+		return
+	}
+	if !info.IsDir() {
+		http.Error(w, "Non è una cartella", http.StatusBadRequest)
 		return
 	}
 
@@ -163,16 +177,16 @@ func (s *GalleryServer) HandleSearch(w http.ResponseWriter, r *http.Request) {
 
 	// Build file list for fzf matching (skip directories)
 	var fileList []models.FileInfo
-	var fileNames []string
-	fileIndex := make(map[string]int) // name -> index in fileList
+	var filePaths []string // Use full paths for matching
+	fileIndex := make(map[string]int) // path -> index in fileList
 
 	for _, f := range allFiles {
 		if f.IsDir {
 			continue
 		}
-		fileIndex[f.Name] = len(fileList)
+		fileIndex[f.Path] = len(fileList)
 		fileList = append(fileList, f)
-		fileNames = append(fileNames, f.Name)
+		filePaths = append(filePaths, f.Path) // Use full path for search
 	}
 
 	// Use fzf algorithm for matching and scoring
@@ -180,7 +194,7 @@ func (s *GalleryServer) HandleSearch(w http.ResponseWriter, r *http.Request) {
 	if query == "" {
 		results = fileList
 	} else {
-		matches := fzf.FuzzySearch(query, fileNames, 0)
+		matches := fzf.FuzzySearch(query, filePaths, 0)
 		for _, match := range matches {
 			if idx, ok := fileIndex[match.Text]; ok {
 				results = append(results, fileList[idx])
@@ -233,12 +247,12 @@ func (s *GalleryServer) HandleFolders(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *GalleryServer) HandleRaw(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/raw/")
+	path, _ := url.PathUnescape(strings.TrimPrefix(r.URL.Path, "/raw/"))
 	s.serveFile(w, r, path)
 }
 
 func (s *GalleryServer) HandleThumb(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/thumb/")
+	path, _ := url.PathUnescape(strings.TrimPrefix(r.URL.Path, "/thumb/"))
 	s.ServeThumbnail(w, r, path)
 }
 
@@ -251,7 +265,141 @@ func (s *GalleryServer) serveFile(w http.ResponseWriter, r *http.Request, path s
 		return
 	}
 
-	http.ServeFile(w, r, fullPath)
+	// Open file to get info and serve with range support
+	file, err := os.Open(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.NotFound(w, r)
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+	defer file.Close()
+
+	stat, err := file.Stat()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if stat.IsDir() {
+		http.Error(w, "Accesso non consentito", http.StatusForbidden)
+		return
+	}
+
+	// Detect content type
+	contentType := getContentType(filepath.Ext(fullPath))
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Accept-Ranges", "bytes")
+
+	// Handle range requests for video/audio streaming
+	rangeHeader := r.Header.Get("Range")
+	if rangeHeader == "" {
+		// No range request - serve entire file
+		w.Header().Set("Content-Length", strconv.FormatInt(stat.Size(), 10))
+		w.WriteHeader(http.StatusOK)
+		io.Copy(w, file)
+		return
+	}
+
+	// Parse range header
+	start, end, err := parseRange(rangeHeader, stat.Size())
+	if err != nil {
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", stat.Size()))
+		http.Error(w, "Invalid Range", http.StatusRequestedRangeNotSatisfiable)
+		return
+	}
+
+	// Serve partial content
+	contentLength := end - start + 1
+	w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, stat.Size()))
+	w.Header().Set("Content-Length", strconv.FormatInt(contentLength, 10))
+	w.WriteHeader(http.StatusPartialContent)
+
+	file.Seek(start, io.SeekStart)
+	io.CopyN(w, file, contentLength)
+}
+
+func getContentType(ext string) string {
+	ext = strings.ToLower(ext)
+	mimeTypes := map[string]string{
+		".mp4":  "video/mp4",
+		".webm": "video/webm",
+		".mov":  "video/quicktime",
+		".avi":  "video/x-msvideo",
+		".mkv":  "video/x-matroska",
+		".flv":  "video/x-flv",
+		".wmv":  "video/x-ms-wmv",
+		".m4v":  "video/mp4",
+		".3gp":  "video/3gpp",
+		".mp3":  "audio/mpeg",
+		".wav":  "audio/wav",
+		".flac": "audio/flac",
+		".aac":  "audio/aac",
+		".ogg":  "audio/ogg",
+		".m4a":  "audio/mp4",
+		".wma":  "audio/x-ms-wma",
+		".opus": "audio/opus",
+		".jpg":  "image/jpeg",
+		".jpeg": "image/jpeg",
+		".png":  "image/png",
+		".gif":  "image/gif",
+		".webp": "image/webp",
+		".bmp":  "image/bmp",
+		".svg":  "image/svg+xml",
+	}
+	if ct, ok := mimeTypes[ext]; ok {
+		return ct
+	}
+	return "application/octet-stream"
+}
+
+func parseRange(rangeHeader string, fileSize int64) (start, end int64, err error) {
+	const prefix = "bytes="
+	if !strings.HasPrefix(rangeHeader, prefix) {
+		return 0, 0, fmt.Errorf("invalid range header")
+	}
+
+	rangeStr := strings.TrimPrefix(rangeHeader, prefix)
+	parts := strings.Split(rangeStr, "-")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("invalid range format")
+	}
+
+	startStr, endStr := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+
+	if startStr == "" {
+		// Suffix range: -500 means last 500 bytes
+		suffix, _ := strconv.ParseInt(endStr, 10, 64)
+		start = fileSize - suffix
+		end = fileSize - 1
+	} else {
+		start, err = strconv.ParseInt(startStr, 10, 64)
+		if err != nil {
+			return 0, 0, err
+		}
+		if endStr == "" {
+			end = fileSize - 1
+		} else {
+			end, err = strconv.ParseInt(endStr, 10, 64)
+			if err != nil {
+				return 0, 0, err
+			}
+		}
+	}
+
+	if start < 0 {
+		start = 0
+	}
+	if end >= fileSize {
+		end = fileSize - 1
+	}
+	if start > end {
+		return 0, 0, fmt.Errorf("invalid range")
+	}
+
+	return start, end, nil
 }
 
 func (s *GalleryServer) scanDirectory(dirPath, relPath string) ([]models.FileInfo, error) {
@@ -267,13 +415,14 @@ func (s *GalleryServer) scanDirectory(dirPath, relPath string) ([]models.FileInf
 			continue
 		}
 
-		// Mostra solo cartelle e file multimediali (immagini + video)
+		// Mostra solo cartelle e file multimediali (immagini + video + audio)
 		ext := strings.ToLower(filepath.Ext(entry.Name()))
 		isImage := isImageExt(ext)
 		isVideo := isVideoExt(ext)
-		isMedia := isImage || isVideo
+		isAudio := isAudioExt(ext)
+		isMedia := isImage || isVideo || isAudio
 
-		// Salta file non multimediali e non cartelle
+		// Salta file non multimediali
 		if !entry.IsDir() && !isMedia {
 			continue
 		}
@@ -287,6 +436,7 @@ func (s *GalleryServer) scanDirectory(dirPath, relPath string) ([]models.FileInf
 			IsDir:   entry.IsDir(),
 			IsImage: isImage,
 			IsVideo: isVideo,
+			IsAudio: isAudio,
 			Ext:     ext,
 		})
 	}
@@ -314,16 +464,11 @@ func (s *GalleryServer) scanDirectoryRecursive(dirPath, relPath string) ([]model
 			return nil
 		}
 
-		// Mostra solo cartelle e file multimediali (immagini + video)
+		// Detect file type for all files
 		ext := strings.ToLower(filepath.Ext(d.Name()))
 		isImage := isImageExt(ext)
 		isVideo := isVideoExt(ext)
-		isMedia := isImage || isVideo
-
-		// Salta file non multimediali e non cartelle
-		if !d.IsDir() && !isMedia {
-			return nil
-		}
+		isAudio := isAudioExt(ext)
 
 		rel, _ := filepath.Rel(s.rootDir, path)
 		allFiles = append(allFiles, models.FileInfo{
@@ -334,6 +479,7 @@ func (s *GalleryServer) scanDirectoryRecursive(dirPath, relPath string) ([]model
 			IsDir:   d.IsDir(),
 			IsImage: isImage,
 			IsVideo: isVideo,
+			IsAudio: isAudio,
 			Ext:     ext,
 		})
 
@@ -356,6 +502,16 @@ func isImageExt(ext string) bool {
 func isVideoExt(ext string) bool {
 	videoExts := []string{".mp4", ".webm", ".mov", ".avi", ".mkv", ".flv", ".wmv", ".m4v", ".3gp"}
 	for _, e := range videoExts {
+		if ext == e {
+			return true
+		}
+	}
+	return false
+}
+
+func isAudioExt(ext string) bool {
+	audioExts := []string{".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a", ".wma", ".opus"}
+	for _, e := range audioExts {
 		if ext == e {
 			return true
 		}
