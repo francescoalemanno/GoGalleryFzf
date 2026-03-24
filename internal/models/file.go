@@ -10,5 +10,6 @@ type FileInfo struct {
 	IsDir   bool      `json:"isDir"`
 	IsImage bool      `json:"isImage"`
 	IsVideo bool      `json:"isVideo"`
+	IsAudio bool      `json:"isAudio"`
 	Ext     string    `json:"ext"`
 }
