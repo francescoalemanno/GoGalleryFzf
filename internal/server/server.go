@@ -15,14 +15,16 @@ import (
 	"strings"
 
 	"gallery/internal/fzf"
+	"gallery/internal/imaging"
 	"gallery/internal/models"
 )
 
 const DefaultPageSize = 100
 
 type GalleryServer struct {
-	rootDir string
-	srv     *http.Server
+	rootDir    string
+	rootDirResolved string // rootDir with symlinks resolved
+	srv        *http.Server
 }
 
 func New(rootDir string) (*GalleryServer, error) {
@@ -30,7 +32,18 @@ func New(rootDir string) (*GalleryServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid root directory: %w", err)
 	}
-	return &GalleryServer{rootDir: absPath}, nil
+	
+	// Resolve symlinks in rootDir for consistent path comparison
+	resolvedPath, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		// If we can't resolve symlinks, use the absolute path
+		resolvedPath = absPath
+	}
+	
+	return &GalleryServer{
+		rootDir:    absPath,
+		rootDirResolved: resolvedPath,
+	}, nil
 }
 
 func (s *GalleryServer) SetServer(srv *http.Server) {
@@ -47,6 +60,241 @@ func (s *GalleryServer) HandleShutdown(w http.ResponseWriter, r *http.Request) {
 			s.srv.Close()
 		}
 	}()
+}
+
+// HandleRotate handles image rotation requests
+func (s *GalleryServer) HandleRotate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Path  string `json:"path"`
+		Angle int    `json:"angle"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "Invalid JSON body",
+		})
+		return
+	}
+
+	// Validate path (prevent directory traversal)
+	fullPath, cleanPath, err := s.resolveAndValidatePath(req.Path)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "Access denied",
+		})
+		return
+	}
+
+	// Check if file exists
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "File not found",
+		})
+		return
+	}
+
+	if info.IsDir() {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "Path is a directory",
+		})
+		return
+	}
+
+	// Check if file is a supported image
+	ext := strings.ToLower(filepath.Ext(cleanPath))
+	if !imaging.IsSupportedFormat(ext) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "Unsupported image format",
+		})
+		return
+	}
+
+	// Perform rotation
+	if err := imaging.RotateImage(fullPath, req.Angle); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	// Invalidate thumbnail cache
+	invalidateThumbnailCache(cleanPath)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"path":    cleanPath,
+		"angle":   req.Angle,
+	})
+}
+
+// invalidateThumbnailCache removes a specific path from the thumbnail cache
+func invalidateThumbnailCache(path string) {
+	thumbCache.delete(path)
+}
+
+// HandleRename handles file rename requests
+func (s *GalleryServer) HandleRename(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Path    string `json:"path"`
+		NewName string `json:"newName"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "Invalid JSON body",
+		})
+		return
+	}
+
+	// Validate newName
+	if err := validateFileName(req.NewName); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	// Validate path (prevent directory traversal)
+	fullPath, cleanPath, err := s.resolveAndValidatePath(req.Path)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "Access denied",
+		})
+		return
+	}
+
+	// Check if file exists
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "File not found",
+		})
+		return
+	}
+
+	if info.IsDir() {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "Cannot rename directories",
+		})
+		return
+	}
+
+	// Build new path
+	dir := filepath.Dir(cleanPath)
+	newPath := filepath.Join(dir, req.NewName)
+	newFullPath, _, err := s.resolveAndValidatePath(newPath)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "Invalid new name",
+		})
+		return
+	}
+
+	// Check if destination already exists
+	if _, err := os.Stat(newFullPath); err == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   "File already exists",
+		})
+		return
+	}
+
+	// Perform rename
+	if err := os.Rename(fullPath, newFullPath); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	// Invalidate thumbnail cache for old path
+	invalidateThumbnailCache(cleanPath)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"oldPath": cleanPath,
+		"newPath": newPath,
+	})
+}
+
+// validateFileName checks if a filename is valid
+func validateFileName(name string) error {
+	if name == "" {
+		return fmt.Errorf("filename cannot be empty")
+	}
+
+	if len(name) > 255 {
+		return fmt.Errorf("filename too long (max 255 characters)")
+	}
+
+	// Check for invalid characters: / \ : * ? " < > |
+	invalidChars := []string{"/", "\\", ":", "*", "?", "\"", "<", ">", "|"}
+	for _, char := range invalidChars {
+		if strings.Contains(name, char) {
+			return fmt.Errorf("filename contains invalid character: %s", char)
+		}
+	}
+
+	// Check for . and .. which are reserved
+	if name == "." || name == ".." {
+		return fmt.Errorf("invalid filename")
+	}
+
+	return nil
 }
 
 func (s *GalleryServer) RootDir() string {
@@ -121,10 +369,8 @@ func (s *GalleryServer) HandleFiles(w http.ResponseWriter, r *http.Request) {
 
 	page, limit := parsePagination(r)
 
-	cleanPath := filepath.Clean(folder)
-	fullPath := filepath.Join(s.rootDir, cleanPath)
-
-	if !strings.HasPrefix(fullPath, s.rootDir) {
+	fullPath, cleanPath, err := s.resolveAndValidatePath(folder)
+	if err != nil {
 		http.Error(w, "Accesso non consentito", http.StatusForbidden)
 		return
 	}
@@ -161,10 +407,8 @@ func (s *GalleryServer) HandleSearch(w http.ResponseWriter, r *http.Request) {
 
 	page, limit := parsePagination(r)
 
-	cleanPath := filepath.Clean(folder)
-	fullPath := filepath.Join(s.rootDir, cleanPath)
-
-	if !strings.HasPrefix(fullPath, s.rootDir) {
+	fullPath, cleanPath, err := s.resolveAndValidatePath(folder)
+	if err != nil {
 		http.Error(w, "Accesso non consentito", http.StatusForbidden)
 		return
 	}
@@ -214,10 +458,8 @@ func (s *GalleryServer) HandleFolders(w http.ResponseWriter, r *http.Request) {
 		folder = "."
 	}
 
-	cleanPath := filepath.Clean(folder)
-	fullPath := filepath.Join(s.rootDir, cleanPath)
-
-	if !strings.HasPrefix(fullPath, s.rootDir) {
+	fullPath, cleanPath, err := s.resolveAndValidatePath(folder)
+	if err != nil {
 		http.Error(w, "Accesso non consentito", http.StatusForbidden)
 		return
 	}
@@ -257,10 +499,8 @@ func (s *GalleryServer) HandleThumb(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *GalleryServer) serveFile(w http.ResponseWriter, r *http.Request, path string) {
-	cleanPath := filepath.Clean(path)
-	fullPath := filepath.Join(s.rootDir, cleanPath)
-
-	if !strings.HasPrefix(fullPath, s.rootDir) {
+	fullPath, _, err := s.resolveAndValidatePath(path)
+	if err != nil {
 		http.Error(w, "Accesso non consentito", http.StatusForbidden)
 		return
 	}
@@ -402,6 +642,57 @@ func parseRange(rangeHeader string, fileSize int64) (start, end int64, err error
 	return start, end, nil
 }
 
+// resolveAndValidatePath resolves the given path relative to rootDir and validates it.
+// It returns the full filesystem path, the clean relative path, and an error if validation fails.
+// This handles symlinks and complex path scenarios properly.
+func (s *GalleryServer) resolveAndValidatePath(userPath string) (fullPath string, cleanRelPath string, err error) {
+	// Clean the input path
+	cleanRelPath = filepath.Clean(userPath)
+
+	// Prevent path traversal at the input level - reject paths that escape the root
+	if strings.HasPrefix(cleanRelPath, "..") || strings.Contains(cleanRelPath, string(filepath.Separator)+"..") {
+		return "", "", fmt.Errorf("path traversal detected")
+	}
+
+	// Join with rootDir to get the full path
+	fullPath = filepath.Join(s.rootDir, cleanRelPath)
+
+	// Resolve symlinks in the full path (this also gives us the canonical absolute path)
+	resolvedPath, resolveErr := filepath.EvalSymlinks(fullPath)
+	if resolveErr != nil {
+		// If the path doesn't exist, we can't resolve symlinks.
+		// Try to resolve the parent directory to validate the path.
+		parentDir := filepath.Dir(fullPath)
+		resolvedParent, parentErr := filepath.EvalSymlinks(parentDir)
+		if parentErr == nil {
+			// Validate that the resolved parent is within resolved root
+			rootPrefix := s.rootDirResolved + string(filepath.Separator)
+			if resolvedParent != s.rootDirResolved && !strings.HasPrefix(resolvedParent+string(filepath.Separator), rootPrefix) {
+				return "", "", fmt.Errorf("path traversal detected")
+			}
+			// Parent is valid. Construct the resolved full path by joining resolved parent with the file name
+			// This ensures the resolved path has the same prefix as rootDirResolved
+			baseName := filepath.Base(fullPath)
+			resolvedPath = filepath.Join(resolvedParent, baseName)
+		} else {
+			// Can't resolve parent either - fall back to basic prefix check on unresolved paths
+			if !strings.HasPrefix(fullPath, s.rootDir+string(filepath.Separator)) && fullPath != s.rootDir {
+				return "", "", fmt.Errorf("path traversal detected")
+			}
+			resolvedPath = fullPath
+		}
+	}
+
+	// Ensure the resolved path is within the resolved root directory
+	// Add trailing separator to prevent partial matches like /rootDirFoo matching /rootDir
+	rootPrefix := s.rootDirResolved + string(filepath.Separator)
+	if resolvedPath != s.rootDirResolved && !strings.HasPrefix(resolvedPath+string(filepath.Separator), rootPrefix) {
+		return "", "", fmt.Errorf("path traversal detected")
+	}
+
+	return fullPath, cleanRelPath, nil
+}
+
 func (s *GalleryServer) scanDirectory(dirPath, relPath string) ([]models.FileInfo, error) {
 	entries, err := os.ReadDir(dirPath)
 	if err != nil {
@@ -469,6 +760,12 @@ func (s *GalleryServer) scanDirectoryRecursive(dirPath, relPath string) ([]model
 		isImage := isImageExt(ext)
 		isVideo := isVideoExt(ext)
 		isAudio := isAudioExt(ext)
+		isMedia := isImage || isVideo || isAudio
+
+		// Salta file non multimediali
+		if !d.IsDir() && !isMedia {
+			return nil
+		}
 
 		rel, _ := filepath.Rel(s.rootDir, path)
 		allFiles = append(allFiles, models.FileInfo{

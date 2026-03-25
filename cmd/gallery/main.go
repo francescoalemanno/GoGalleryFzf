@@ -108,6 +108,8 @@ func main() {
 	mux.HandleFunc("/api/search", gallery.HandleSearch)
 	mux.HandleFunc("/api/folders", gallery.HandleFolders)
 	mux.HandleFunc("/api/shutdown", gallery.HandleShutdown)
+	mux.HandleFunc("/api/rotate", gallery.HandleRotate)
+	mux.HandleFunc("/api/rename", gallery.HandleRename)
 	mux.HandleFunc("/raw/", gallery.HandleRaw)
 	mux.HandleFunc("/thumb/", gallery.HandleThumb)
 

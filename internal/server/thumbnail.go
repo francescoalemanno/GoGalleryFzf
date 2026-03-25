@@ -62,6 +62,19 @@ func (c *ThumbnailCache) set(key string, data []byte) {
 	c.order = append(c.order, key)
 }
 
+func (c *ThumbnailCache) delete(key string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	delete(c.cache, key)
+	for i, k := range c.order {
+		if k == key {
+			c.order = append(c.order[:i], c.order[i+1:]...)
+			break
+		}
+	}
+}
+
 func generateThumbnail(imgPath string) ([]byte, error) {
 	file, err := os.Open(imgPath)
 	if err != nil {
@@ -117,10 +130,8 @@ func generateThumbnail(imgPath string) ([]byte, error) {
 
 // ServeThumbnail generates and serves a thumbnail
 func (s *GalleryServer) ServeThumbnail(w http.ResponseWriter, r *http.Request, path string) {
-	cleanPath := filepath.Clean(path)
-	fullPath := filepath.Join(s.rootDir, cleanPath)
-
-	if !strings.HasPrefix(fullPath, s.rootDir) {
+	fullPath, cleanPath, err := s.resolveAndValidatePath(path)
+	if err != nil {
 		http.Error(w, "Accesso non consentito", http.StatusForbidden)
 		return
 	}
