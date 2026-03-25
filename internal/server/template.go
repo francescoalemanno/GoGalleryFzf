@@ -1354,14 +1354,209 @@ const HTMLTemplate = `<!DOCTYPE html>
             loadFiles(state.currentFolder);
         });
 
+        // Streaming search state
         let searchTimeout;
+        let currentEventSource = null;
+        const searchResultsMap = new Map(); // For deduplication during streaming
+        let streamingRerenderTimeout = null;
+        const SSE_SUPPORTED = typeof EventSource !== 'undefined';
+
+        // Debounced search input handler with streaming support
         elements.searchInput.addEventListener('input', (e) => {
             clearTimeout(searchTimeout);
             searchTimeout = setTimeout(() => {
                 state.searchQuery = e.target.value;
-                loadFiles(state.currentFolder, state.searchQuery);
+                if (state.searchQuery) {
+                    performSearch(state.currentFolder, state.searchQuery);
+                } else {
+                    // Empty query - cancel any streaming and load normal folder view
+                    cancelStreamingSearch();
+                    loadFiles(state.currentFolder);
+                }
             }, 300);
         });
+
+        // Cancel any ongoing streaming search
+        function cancelStreamingSearch() {
+            if (currentEventSource) {
+                currentEventSource.close();
+                currentEventSource = null;
+            }
+            if (streamingRerenderTimeout) {
+                clearTimeout(streamingRerenderTimeout);
+                streamingRerenderTimeout = null;
+            }
+            searchResultsMap.clear();
+        }
+
+        // Perform search using streaming (SSE) with fallback to standard API
+        async function performSearch(folder, query) {
+            // Cancel any previous search
+            cancelStreamingSearch();
+
+            // Reset state for new search
+            state.currentPage = 1;
+            state.files = [];
+            state.media = [];
+            renderedFiles.clear();
+            loadingPages.clear();
+            elements.gallery.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+            updateBreadcrumb(folder);
+
+            // Try streaming if supported
+            if (SSE_SUPPORTED) {
+                try {
+                    await performStreamingSearch(folder, query);
+                    return;
+                } catch (err) {
+                    console.log('Streaming search failed, falling back to standard search:', err);
+                    // Fall through to standard search
+                }
+            }
+
+            // Fallback to standard search API
+            await loadFiles(folder, query);
+        }
+
+        // Perform streaming search using SSE with auto-retry
+        function performStreamingSearch(folder, query, retryCount = 0) {
+            return new Promise((resolve, reject) => {
+                const url = '/api/search/stream?q=' + encodeURIComponent(query) + '&folder=' + encodeURIComponent(folder);
+                
+                currentEventSource = new EventSource(url);
+                
+                let matchCount = 0;
+                let hasReceivedData = false;
+                const BATCH_INTERVAL = 100; // Rerender every 100ms max
+                let pendingMatches = [];
+                let errorOccurred = false;
+
+                // Set a connection timeout
+                const connectionTimeout = setTimeout(() => {
+                    if (!hasReceivedData) {
+                        currentEventSource.close();
+                        currentEventSource = null;
+                        errorOccurred = true;
+                        
+                        // Retry once if we haven't retried yet
+                        if (retryCount < 1) {
+                            setTimeout(() => {
+                                performStreamingSearch(folder, query, retryCount + 1)
+                                    .then(resolve)
+                                    .catch(reject);
+                            }, 100);
+                        } else {
+                            reject(new Error('SSE connection timeout'));
+                        }
+                    }
+                }, 5000);
+
+                currentEventSource.onmessage = (e) => {
+                    hasReceivedData = true;
+                    clearTimeout(connectionTimeout);
+
+                    try {
+                        const data = JSON.parse(e.data);
+
+                        if (data.type === 'match') {
+                            // Add/update file in deduplication map
+                            const existing = searchResultsMap.get(data.file.path);
+                            if (!existing || data.score > existing.score) {
+                                searchResultsMap.set(data.file.path, {
+                                    file: data.file,
+                                    score: data.score
+                                });
+                                pendingMatches.push(data.file);
+                            }
+
+                            // Debounced rerender
+                            if (!streamingRerenderTimeout) {
+                                streamingRerenderTimeout = setTimeout(() => {
+                                    streamingRerenderTimeout = null;
+                                    updateStreamingResults();
+                                }, BATCH_INTERVAL);
+                            }
+                        } else if (data.type === 'done') {
+                            // Final update
+                            if (streamingRerenderTimeout) {
+                                clearTimeout(streamingRerenderTimeout);
+                                streamingRerenderTimeout = null;
+                            }
+                            updateStreamingResults();
+                            updateStreamingStats(matchCount, true, false);
+                            currentEventSource.close();
+                            currentEventSource = null;
+                            resolve();
+                        } else if (data.type === 'partial') {
+                            // Partial results warning - update stats to show warning
+                            updateStreamingStats(matchCount, false, true);
+                        } else if (data.type === 'error') {
+                            throw new Error(data.message || 'Search error');
+                        }
+                    } catch (err) {
+                        errorOccurred = true;
+                        currentEventSource.close();
+                        currentEventSource = null;
+                        reject(err);
+                    }
+                };
+
+                currentEventSource.onerror = (err) => {
+                    if (errorOccurred) return; // Already handled
+                    errorOccurred = true;
+                    clearTimeout(connectionTimeout);
+                    currentEventSource.close();
+                    currentEventSource = null;
+                    
+                    // Retry once if we haven't retried yet
+                    if (retryCount < 1) {
+                        setTimeout(() => {
+                            performStreamingSearch(folder, query, retryCount + 1)
+                                .then(resolve)
+                                .catch(reject);
+                        }, 100);
+                    } else {
+                        reject(err);
+                    }
+                };
+
+                function updateStreamingResults() {
+                    // Convert map to sorted array (by score descending)
+                    const sortedResults = Array.from(searchResultsMap.values())
+                        .sort((a, b) => b.score - a.score)
+                        .map(item => item.file);
+
+                    // Update state
+                    state.files = sortedResults;
+                    state.media = sortedResults.filter(f => f.isImage || f.isVideo || f.isAudio);
+
+                    // Render
+                    elements.gallery.innerHTML = '';
+                    renderedFiles.clear();
+                    
+                    if (sortedResults.length === 0) {
+                        elements.gallery.innerHTML = '<div class="empty-state"><div class="icon">🔍</div><p>Nessun risultato trovato</p></div>';
+                    } else {
+                        sortedResults.forEach(f => renderedFiles.add(f.path));
+                        appendGallery(sortedResults, false);
+                    }
+
+                    matchCount = sortedResults.length;
+                    updateStreamingStats(matchCount, false, false);
+                    pendingMatches = [];
+                }
+
+                function updateStreamingStats(count, complete, isPartial) {
+                    let statusText = '';
+                    if (isPartial) {
+                        statusText = ' (risultati parziali - troppi file)';
+                    } else if (!complete) {
+                        statusText = ' (scansione in corso...)';
+                    }
+                    elements.stats.textContent = count + ' risultati trovati' + statusText;
+                }
+            });
+        }
 
         elements.lightboxClose.addEventListener('click', closeLightbox);
         elements.lightboxNext.addEventListener('click', (e) => { e.stopPropagation(); nextMedia(); });

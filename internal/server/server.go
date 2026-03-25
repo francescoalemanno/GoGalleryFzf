@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -13,6 +14,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"gallery/internal/fzf"
 	"gallery/internal/imaging"
@@ -396,6 +399,289 @@ func (s *GalleryServer) HandleFiles(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+// SearchMatch represents a single match event for SSE streaming
+type SearchMatch struct {
+	Type string           `json:"type"`
+	File models.FileInfo  `json:"file,omitempty"`
+	Score int             `json:"score,omitempty"`
+}
+
+// HandleSearchStream streams search results via Server-Sent Events
+// as they are found, rather than waiting for the full directory scan
+func (s *GalleryServer) HandleSearchStream(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query().Get("q")
+	folder := r.URL.Query().Get("folder")
+	if folder == "" {
+		folder = "."
+	}
+
+	fullPath, cleanPath, err := s.resolveAndValidatePath(folder)
+	if err != nil {
+		http.Error(w, "Accesso non consentito", http.StatusForbidden)
+		return
+	}
+
+	// Set SSE headers
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// Ensure we can flush to the client
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	ctx := r.Context()
+
+	// Stream results as we find them
+	err = s.scanAndStreamMatches(ctx, fullPath, cleanPath, query, w, flusher)
+	if err != nil {
+		// Send error event if we can
+		jsonData, _ := json.Marshal(map[string]string{"type": "error", "message": err.Error()})
+		fmt.Fprintf(w, "data: %s\n\n", jsonData)
+		flusher.Flush()
+		return
+	}
+
+	// Send completion event
+	jsonData, _ := json.Marshal(map[string]string{"type": "done"})
+	fmt.Fprintf(w, "data: %s\n\n", jsonData)
+	flusher.Flush()
+}
+
+// scanAndStreamMatches walks the directory and streams matches via SSE
+// with server-side buffering and prioritization for high-volume directories
+func (s *GalleryServer) scanAndStreamMatches(ctx context.Context, dirPath, relPath, query string, w io.Writer, flusher http.Flusher) error {
+	// Configuration for batching and limits
+	const (
+		batchInterval     = 50 * time.Millisecond // Batch events for 50ms
+		maxResults        = 1000                  // Cap total streamed results
+		highScoreThreshold = 5000                 // Scores above this stream immediately
+	)
+
+	type scoredMatch struct {
+		match SearchMatch
+		score int
+	}
+
+	var (
+		batch      []scoredMatch
+		resultCount int
+		batchTimer  *time.Timer
+		timerMu     sync.Mutex
+		flushChan   = make(chan struct{}, 1)
+	)
+
+	// sendSSE sends a single SSE event with proper formatting
+	sendSSE := func(data interface{}) error {
+		jsonData, err := json.Marshal(data)
+		if err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "data: %s\n\n", jsonData); err != nil {
+			return err
+		}
+		flusher.Flush()
+		return nil
+	}
+
+	// flushBatch sends all accumulated matches and resets the batch
+	flushBatch := func() {
+		timerMu.Lock()
+		if batchTimer != nil {
+			batchTimer.Stop()
+			batchTimer = nil
+		}
+		matches := batch
+		batch = nil
+		timerMu.Unlock()
+
+		if len(matches) == 0 {
+			return
+		}
+
+		// Sort by score descending before sending
+		sort.Slice(matches, func(i, j int) bool {
+			return matches[i].score > matches[j].score
+		})
+
+		for _, sm := range matches {
+			if err := sendSSE(sm.match); err != nil {
+				return // Error will be handled by caller
+			}
+		}
+	}
+
+	// flushBatchWithError returns error for proper error handling
+	flushBatchWithError := func() error {
+		timerMu.Lock()
+		if batchTimer != nil {
+			batchTimer.Stop()
+			batchTimer = nil
+		}
+		matches := batch
+		batch = nil
+		timerMu.Unlock()
+
+		if len(matches) == 0 {
+			return nil
+		}
+
+		// Sort by score descending before sending
+		sort.Slice(matches, func(i, j int) bool {
+			return matches[i].score > matches[j].score
+		})
+
+		for _, sm := range matches {
+			if err := sendSSE(sm.match); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	// Start batch flush goroutine
+	done := make(chan struct{})
+	defer close(done)
+
+	go func() {
+		for {
+			select {
+			case <-flushChan:
+				flushBatch()
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	walkErr := filepath.WalkDir(dirPath, func(path string, d fs.DirEntry, err error) error {
+		// Check for context cancellation
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		// Check result limit
+		if resultCount >= maxResults {
+			// Send partial results warning before stopping
+			warningEvent := SearchMatch{Type: "partial"}
+			jsonData, _ := json.Marshal(warningEvent)
+			fmt.Fprintf(w, "data: %s\n\n", jsonData)
+			flusher.Flush()
+			return filepath.SkipDir // Skip remaining directories
+		}
+
+		if err != nil {
+			return nil // Skip files we can't access
+		}
+
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+
+		// Skip directories for matching (but continue walking)
+		if d.IsDir() {
+			return nil
+		}
+
+		// Detect file type
+		ext := strings.ToLower(filepath.Ext(d.Name()))
+		isImage := isImageExt(ext)
+		isVideo := isVideoExt(ext)
+		isAudio := isAudioExt(ext)
+		isMedia := isImage || isVideo || isAudio
+
+		// Skip non-media files
+		if !isMedia {
+			return nil
+		}
+
+		// Get relative path
+		fileRelPath, _ := filepath.Rel(s.rootDir, path)
+
+		// Check if file matches the search query
+		var score int
+		if query == "" {
+			// Empty query matches everything with score 0
+			score = 0
+		} else {
+			// Use fzf algorithm for matching
+			matched, s, _ := fzf.FuzzyMatch(query, fileRelPath, false)
+			if !matched {
+				return nil
+			}
+			score = s
+		}
+
+		// Create file info
+		fileInfo := models.FileInfo{
+			Name:    d.Name(),
+			Path:    fileRelPath,
+			Size:    info.Size(),
+			ModTime: info.ModTime(),
+			IsDir:   false,
+			IsImage: isImage,
+			IsVideo: isVideo,
+			IsAudio: isAudio,
+			Ext:     ext,
+		}
+
+		// Create the match
+		match := SearchMatch{
+			Type:  "match",
+			File:  fileInfo,
+			Score: score,
+		}
+
+		resultCount++
+
+		// High-score matches stream immediately (prioritized)
+		// Empty query (score 0) or high scores go immediately
+		if score >= highScoreThreshold || query == "" {
+			// Flush any pending batch first to maintain order
+			if err := flushBatchWithError(); err != nil {
+				return err
+			}
+			if err := sendSSE(match); err != nil {
+				return err
+			}
+		} else {
+			// Lower scores are batched
+			batch = append(batch, scoredMatch{match: match, score: score})
+
+			// Start or reset batch timer
+			timerMu.Lock()
+			if batchTimer != nil {
+				batchTimer.Stop()
+			}
+			batchTimer = time.AfterFunc(batchInterval, func() {
+				select {
+				case flushChan <- struct{}{}:
+				default:
+				}
+			})
+			timerMu.Unlock()
+		}
+
+		return nil
+	})
+
+	// Final flush of any remaining matches
+	if err := flushBatchWithError(); err != nil {
+		return err
+	}
+
+	return walkErr
 }
 
 func (s *GalleryServer) HandleSearch(w http.ResponseWriter, r *http.Request) {
