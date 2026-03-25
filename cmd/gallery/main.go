@@ -106,7 +106,6 @@ func main() {
 	mux.HandleFunc("/", gallery.HandleIndex)
 	mux.HandleFunc("/api/files", gallery.HandleFiles)
 	mux.HandleFunc("/api/search", gallery.HandleSearch)
-	mux.HandleFunc("/api/search/stream", gallery.HandleSearchStream)
 	mux.HandleFunc("/api/folders", gallery.HandleFolders)
 	mux.HandleFunc("/api/shutdown", gallery.HandleShutdown)
 	mux.HandleFunc("/api/rotate", gallery.HandleRotate)
