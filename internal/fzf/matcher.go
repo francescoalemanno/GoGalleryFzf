@@ -59,22 +59,14 @@ func FuzzyMatch(pattern, text string, caseSensitive bool) (bool, int, []int) {
 	// Convert positions from rune indices to byte indices
 	var bytePositions []int
 	if positions != nil {
-		bytePositions = make([]int, len(*positions))
 		runeIdx := 0
-		byteIdx := 0
 		for i := 0; i < len(text); {
-			r, size := utf8.DecodeRuneInString(text[i:])
-			if r == utf8.RuneError && size == 1 {
-				// Invalid UTF-8, treat as single byte
-				byteIdx = i
-			} else {
-				byteIdx = i
-			}
+			_, size := utf8.DecodeRuneInString(text[i:])
 			
 			// Check if this rune index is in positions
 			for _, pos := range *positions {
 				if pos == runeIdx {
-					bytePositions = append(bytePositions, byteIdx)
+					bytePositions = append(bytePositions, i)
 					break
 				}
 			}
