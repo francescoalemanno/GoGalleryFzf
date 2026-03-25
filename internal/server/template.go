@@ -244,37 +244,52 @@ const HTMLTemplate = `<!DOCTYPE html>
             align-items: center;
         }
         .lightbox.active { display: flex; }
-        .lightbox-content { 
-            position: relative; 
-            max-width: 95vw; 
+        .lightbox-content {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .lightbox-media-wrapper {
+            position: relative;
+            max-width: 95vw;
             max-height: 95vh;
             display: flex;
-            flex-direction: column;
+            justify-content: center;
             align-items: center;
         }
         .lightbox img, .lightbox video {
-            max-width: 100%; max-height: 85vh;
+            max-width: 95vw; max-height: 95vh;
             object-fit: contain;
             border-radius: 8px;
             box-shadow: 0 30px 60px rgba(0,0,0,0.5);
         }
         .lightbox video { background: #000; }
         .lightbox-close {
-            position: absolute;
-            top: -50px;
-            right: 0;
-            background: none;
-            border: none;
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(0,0,0,0.7);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.1);
             color: #fff;
-            font-size: 2rem;
+            font-size: 1.5rem;
             cursor: pointer;
-            opacity: 0.7;
-            transition: opacity 0.2s;
-            z-index: 10;
+            opacity: 0.8;
+            transition: all 0.2s;
+            z-index: 2100;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
-        .lightbox-close:hover { opacity: 1; }
+        .lightbox-close:hover { opacity: 1; background: rgba(255,50,50,0.8); }
         .lightbox-nav {
-            position: absolute;
+            position: fixed;
             top: 50%;
             transform: translateY(-50%);
             background: rgba(255,255,255,0.1);
@@ -287,32 +302,269 @@ const HTMLTemplate = `<!DOCTYPE html>
             width: 60px; height: 60px;
             transition: all 0.2s;
             backdrop-filter: blur(10px);
-            z-index: 10;
+            z-index: 2100;
         }
         .lightbox-nav:hover {
             background: rgba(255,255,255,0.2);
             transform: translateY(-50%) scale(1.1);
         }
-        .lightbox-prev { left: -80px; }
-        .lightbox-next { right: -80px; }
-        .lightbox-info {
-            margin-top: 1rem;
+        .lightbox-prev { left: 20px; }
+        .lightbox-next { right: 20px; }
+        .lightbox-overlay {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            z-index: 2100;
+            max-width: 95vw;
+            width: auto;
+            transition: all 0.3s ease;
+        }
+        .lightbox-overlay.collapsed .lightbox-overlay-top,
+        .lightbox-overlay.collapsed .lightbox-overlay-bottom {
+            opacity: 0;
+            max-height: 0;
+            padding: 0;
+            margin: 0;
+            overflow: hidden;
+            pointer-events: none;
+        }
+        .lightbox-overlay.expanded .lightbox-overlay-top,
+        .lightbox-overlay.expanded .lightbox-overlay-bottom {
+            opacity: 1;
+            max-height: 500px;
+            transition: opacity 0.3s ease, max-height 0.3s ease, padding 0.3s ease;
+        }
+        .lightbox-overlay-top {
+            background: rgba(0, 0, 0, 0.75);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 0.75rem 1.25rem;
             text-align: center;
+            transition: opacity 0.3s ease, max-height 0.3s ease, padding 0.3s ease;
+        }
+        .lightbox-overlay-bottom {
+            background: rgba(0, 0, 0, 0.75);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 0.75rem 1.25rem;
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            align-items: center;
+            gap: 0.75rem;
+            transition: opacity 0.3s ease, max-height 0.3s ease, padding 0.3s ease;
+        }
+        .lightbox-overlay-toggle {
+            background: rgba(0, 0, 0, 0.75);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 24px;
+            padding: 0.6rem 1.25rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            color: #fff;
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: all 0.2s ease;
+            align-self: center;
+            min-height: 44px;
+            min-width: 100px;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .lightbox-overlay-toggle:hover {
+            background: rgba(0, 212, 255, 0.35);
+            border-color: rgba(0, 212, 255, 0.6);
+            transform: translateY(-2px);
+        }
+        .lightbox-overlay-toggle:active {
+            transform: translateY(0);
+        }
+        .lightbox-overlay-toggle .chevron {
+            transition: transform 0.3s ease;
+            font-size: 0.8rem;
+        }
+        .lightbox-overlay.collapsed .lightbox-overlay-toggle .chevron {
+            transform: rotate(0deg);
+        }
+        .lightbox-overlay.expanded .lightbox-overlay-toggle .chevron {
+            transform: rotate(180deg);
+        }
+        .lightbox-overlay .filename {
+            font-size: 1rem;
+            color: #fff;
+            font-weight: 500;
+            margin-bottom: 0.25rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+        .lightbox-overlay .filepath {
+            font-size: 0.8rem;
+            color: #aaa;
+            word-break: break-all;
+            margin-bottom: 0.25rem;
+        }
+        .lightbox-overlay .counter {
+            font-size: 0.85rem;
+            color: #888;
+        }
+        .lightbox-overlay .video-hint {
+            font-size: 0.75rem;
+            color: #888;
+            margin-top: 0.25rem;
+        }
+        .rotate-controls {
+            display: flex;
+            gap: 0.5rem;
+        }
+        .rotate-btn {
+            background: rgba(255,255,255,0.12);
+            border: 1px solid rgba(255,255,255,0.2);
+            color: #fff;
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 0.3rem;
+            white-space: nowrap;
+        }
+        .rotate-btn:hover {
+            background: rgba(0,212,255,0.35);
+            border-color: rgba(0,212,255,0.6);
+            transform: translateY(-1px);
+        }
+        .rotate-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .rotate-btn.spinning {
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5;
+        }
+        }
+        .rename-btn {
+            background: rgba(255,255,255,0.12);
+            border: 1px solid rgba(255,255,255,0.2);
+            color: #fff;
+            padding: 0.35rem 0.75rem;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            white-space: nowrap;
+        }
+        .rename-btn:hover {
+            background: rgba(0,212,255,0.35);
+            border-color: rgba(0,212,255,0.6);
+            transform: translateY(-1px);
+        }
+        .rename-modal {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.8);
+            z-index: 3000;
+            justify-content: center;
+            align-items: center;
+        }
+        .rename-modal.active { display: flex; }
+        .rename-modal-content {
+            background: linear-gradient(145deg, #1a1a2e, #16213e);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 16px;
+            padding: 2rem;
+            min-width: 400px;
+            max-width: 90vw;
+        }
+        .rename-modal h3 {
+            margin-bottom: 1rem;
+            color: #fff;
+            font-size: 1.2rem;
+        }
+        .rename-modal .current-name {
+            color: #888;
+            font-size: 0.85rem;
+            margin-bottom: 1rem;
+            word-break: break-all;
+        }
+        .rename-modal input {
+            width: 100%;
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 8px;
+            padding: 0.8rem 1rem;
+            color: #fff;
+            font-size: 1rem;
+            margin-bottom: 0.5rem;
+        }
+        .rename-modal input:focus {
+            outline: none;
+            border-color: #00d4ff;
+            background: rgba(255,255,255,0.15);
+        }
+        .rename-modal input.error {
+            border-color: #ff6b6b;
+        }
+        .rename-modal .error-msg {
+            color: #ff6b6b;
+            font-size: 0.85rem;
+            margin-bottom: 1rem;
+            min-height: 1.2rem;
+        }
+        .rename-modal .btn-group {
+            display: flex;
+            gap: 0.5rem;
+            justify-content: flex-end;
+        }
+        .rename-modal button {
+            padding: 0.7rem 1.5rem;
+            border-radius: 8px;
+            border: none;
+            cursor: pointer;
+            font-size: 0.95rem;
+            transition: all 0.2s;
+        }
+        .rename-modal .btn-cancel {
+            background: rgba(255,255,255,0.1);
             color: #fff;
         }
-        .lightbox-info .filename { font-size: 1rem; margin-bottom: 0.3rem; }
-        .lightbox-info .filepath {
-            font-size: 0.8rem;
-            color: #888;
-            margin-bottom: 0.3rem;
-            word-break: break-all;
-            max-width: 80vw;
+        .rename-modal .btn-cancel:hover {
+            background: rgba(255,255,255,0.2);
         }
-        .lightbox-info .counter { font-size: 0.85rem; color: #888; }
-        .video-controls-hint {
-            font-size: 0.75rem;
-            color: #666;
-            margin-top: 0.5rem;
+        .rename-modal .btn-confirm {
+            background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+            color: #fff;
+        }
+        .rename-modal .btn-confirm:hover {
+            opacity: 0.9;
+            transform: translateY(-1px);
+        }
+        .rename-modal .btn-confirm:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
         }
         .empty-state {
             text-align: center;
@@ -388,6 +640,64 @@ const HTMLTemplate = `<!DOCTYPE html>
             .lightbox-next { right: 10px; }
             .lightbox-nav { width: 45px; height: 45px; font-size: 1.5rem; }
             .play-icon { width: 45px; height: 45px; font-size: 1.2rem; }
+            .lightbox-overlay {
+                bottom: 10px;
+                width: calc(100% - 20px);
+                max-width: none;
+            }
+            .lightbox-overlay-top,
+            .lightbox-overlay-bottom {
+                padding: 0.6rem 1rem;
+            }
+            .lightbox-overlay .filename {
+                font-size: 0.9rem;
+            }
+            .lightbox-overlay .filepath {
+                font-size: 0.75rem;
+            }
+            .lightbox-close {
+                top: 10px;
+                right: 10px;
+                width: 44px;
+                height: 44px;
+                font-size: 1.3rem;
+            }
+            .rotate-btn {
+                padding: 0.5rem 0.75rem;
+                font-size: 0.85rem;
+                min-height: 44px;
+            }
+            .rename-btn {
+                padding: 0.4rem 0.6rem;
+                font-size: 0.75rem;
+                min-height: 36px;
+            }
+            .lightbox-overlay-toggle {
+                min-height: 48px;
+                min-width: 110px;
+                padding: 0.7rem 1.5rem;
+                font-size: 0.95rem;
+            }
+            .lightbox-overlay-toggle .chevron {
+                font-size: 0.85rem;
+            }
+        }
+        @media (max-height: 500px) {
+            .lightbox-overlay {
+                bottom: 5px;
+                flex-direction: row;
+                flex-wrap: wrap;
+                justify-content: center;
+                gap: 0.5rem;
+            }
+            .lightbox-overlay-top,
+            .lightbox-overlay-bottom {
+                padding: 0.5rem 0.75rem;
+            }
+            .rotate-btn {
+                padding: 0.4rem 0.6rem;
+                font-size: 0.8rem;
+            }
         }
     </style>
 </head>
@@ -415,13 +725,40 @@ const HTMLTemplate = `<!DOCTYPE html>
         <div class="lightbox-content">
             <button class="lightbox-close" id="lightboxClose">✕</button>
             <button class="lightbox-nav lightbox-prev" id="lightboxPrev">‹</button>
-            <div id="lightboxMedia"></div>
+            <div class="lightbox-media-wrapper" id="lightboxMedia"></div>
             <button class="lightbox-nav lightbox-next" id="lightboxNext">›</button>
-            <div class="lightbox-info">
-                <div class="filename" id="lightboxFilename"></div>
+        </div>
+        <div class="lightbox-overlay collapsed" id="lightboxOverlay">
+            <button class="lightbox-overlay-toggle" id="lightboxOverlayToggle" title="Mostra/Nascondi info (I)">
+                <span>ℹ️ Info</span>
+                <span class="chevron">▼</span>
+            </button>
+            <div class="lightbox-overlay-top">
+                <div class="filename">
+                    <span id="lightboxFilename"></span>
+                    <button class="rename-btn" id="renameBtn" title="Rinomina (F2)">✏️ Rinomina</button>
+                </div>
                 <div class="filepath" id="lightboxFilepath"></div>
                 <div class="counter" id="lightboxCounter"></div>
-                <div class="video-controls-hint" id="videoHint"></div>
+                <div class="video-hint" id="videoHint"></div>
+            </div>
+            <div class="lightbox-overlay-bottom" id="rotateControls" style="display: none;">
+                <div class="rotate-controls">
+                    <button class="rotate-btn" id="rotateCCW" title="Ruota -90° (Shift+R)">↺ -90°</button>
+                    <button class="rotate-btn" id="rotateCW" title="Ruota +90° (R)">↻ +90°</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="rename-modal" id="renameModal">
+        <div class="rename-modal-content">
+            <h3>✏️ Rinomina file</h3>
+            <div class="current-name" id="renameCurrentName"></div>
+            <input type="text" id="renameInput" placeholder="Nuovo nome..." autocomplete="off">
+            <div class="error-msg" id="renameError"></div>
+            <div class="btn-group">
+                <button class="btn-cancel" id="renameCancel">Annulla</button>
+                <button class="btn-confirm" id="renameConfirm">Conferma</button>
             </div>
         </div>
     </div>
@@ -435,7 +772,8 @@ const HTMLTemplate = `<!DOCTYPE html>
             currentPage: 1,
             hasMore: false,
             isLoading: false,
-            totalFiles: 0
+            totalFiles: 0,
+            overlayExpanded: false
         };
         const mediaTypes = { image: 1, video: 1, audio: 1 };
         const elements = {
@@ -446,6 +784,7 @@ const HTMLTemplate = `<!DOCTYPE html>
             stats: document.getElementById('stats'),
             sentinel: document.getElementById('sentinel'),
             lightbox: document.getElementById('lightbox'),
+            lightboxOverlay: document.getElementById('lightboxOverlay'),
             lightboxMedia: document.getElementById('lightboxMedia'),
             lightboxFilename: document.getElementById('lightboxFilename'),
             lightboxFilepath: document.getElementById('lightboxFilepath'),
@@ -453,7 +792,18 @@ const HTMLTemplate = `<!DOCTYPE html>
             videoHint: document.getElementById('videoHint'),
             lightboxClose: document.getElementById('lightboxClose'),
             lightboxPrev: document.getElementById('lightboxPrev'),
-            lightboxNext: document.getElementById('lightboxNext')
+            lightboxNext: document.getElementById('lightboxNext'),
+            rotateControls: document.getElementById('rotateControls'),
+            rotateCW: document.getElementById('rotateCW'),
+            rotateCCW: document.getElementById('rotateCCW'),
+            renameBtn: document.getElementById('renameBtn'),
+            renameModal: document.getElementById('renameModal'),
+            renameInput: document.getElementById('renameInput'),
+            renameCurrentName: document.getElementById('renameCurrentName'),
+            renameError: document.getElementById('renameError'),
+            renameCancel: document.getElementById('renameCancel'),
+            renameConfirm: document.getElementById('renameConfirm'),
+            lightboxOverlayToggle: document.getElementById('lightboxOverlayToggle')
         };
 
         // Intersection Observer for infinite scroll
@@ -652,21 +1002,22 @@ const HTMLTemplate = `<!DOCTYPE html>
             showMedia(index);
             elements.lightbox.classList.add('active');
             document.body.style.overflow = 'hidden';
+            // Reset overlay to collapsed state by default
+            setOverlayExpanded(false);
         }
 
         function showMedia(index) {
             const media = state.media[index];
             const mediaUrl = '/raw/' + encodePath(media.path);
             elements.lightboxMedia.innerHTML = '';
+            elements.rotateControls.style.display = 'none';
             if (media.isVideo) {
                 const video = document.createElement('video');
                 video.src = mediaUrl;
                 video.controls = true;
                 video.autoplay = true;
-                video.style.maxWidth = '100%';
-                video.style.maxHeight = '85vh';
                 elements.lightboxMedia.appendChild(video);
-                elements.videoHint.textContent = 'Spazio per play/pause • ← → per navigare • ESC per chiudere';
+                elements.videoHint.textContent = 'Spazio per play/pause • ← → per navigare • ESC per chiudere • F2 per rinominare';
             } else if (media.isAudio) {
                 const audio = document.createElement('audio');
                 audio.src = mediaUrl;
@@ -675,13 +1026,15 @@ const HTMLTemplate = `<!DOCTYPE html>
                 audio.style.width = '100%';
                 audio.style.maxWidth = '600px';
                 elements.lightboxMedia.appendChild(audio);
-                elements.videoHint.textContent = 'Spazio per play/pause • ← → per navigare • ESC per chiudere';
+                elements.videoHint.textContent = 'Spazio per play/pause • ← → per navigare • ESC per chiudere • F2 per rinominare';
             } else {
                 const img = document.createElement('img');
                 img.src = mediaUrl;
                 img.alt = media.name;
+                img.id = 'lightboxImg';
                 elements.lightboxMedia.appendChild(img);
-                elements.videoHint.textContent = '';
+                elements.videoHint.textContent = 'R per ruotare +90° • Shift+R per -90° • F2 per rinominare';
+                elements.rotateControls.style.display = 'flex';
             }
             elements.lightboxFilename.textContent = media.name;
             elements.lightboxFilepath.textContent = '📂 ' + media.path;
@@ -689,11 +1042,210 @@ const HTMLTemplate = `<!DOCTYPE html>
             elements.lightboxCounter.textContent = (index + 1) + ' / ' + state.media.length + mediaIcon;
         }
 
+        async function rotateImage(angle) {
+            const media = state.media[state.currentMediaIndex];
+            if (!media || !media.isImage) return;
+
+            const btn = angle > 0 ? elements.rotateCW : elements.rotateCCW;
+            const originalText = btn.textContent;
+            btn.disabled = true;
+            btn.classList.add('spinning');
+            btn.textContent = '⏳ ...';
+
+            try {
+                const response = await fetch('/api/rotate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: media.path, angle: angle })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    // Add cache-buster to reload image
+                    const img = document.getElementById('lightboxImg');
+                    if (img) {
+                        const cacheBuster = '?t=' + Date.now();
+                        img.src = '/raw/' + encodePath(media.path) + cacheBuster;
+                    }
+                    // Also update thumbnail in gallery
+                    const thumbImg = document.querySelector('.gallery-item[data-path="' + media.path + '"] img');
+                    if (thumbImg) {
+                        thumbImg.src = '/thumb/' + encodePath(media.path) + '?t=' + Date.now();
+                    }
+                } else {
+                    alert('Errore rotazione: ' + (result.error || 'Sconosciuto'));
+                }
+            } catch (err) {
+                console.error('Errore rotazione:', err);
+                alert('Errore durante la rotazione');
+            } finally {
+                btn.disabled = false;
+                btn.classList.remove('spinning');
+                btn.textContent = originalText;
+            }
+        }
+
+        // Rename functionality
+        const invalidChars = /[\\/:*?"<>|]/;
+
+        function validateNewName(name) {
+            if (!name || name.trim() === '') {
+                return 'Il nome non può essere vuoto';
+            }
+            if (name.length > 255) {
+                return 'Il nome è troppo lungo (max 255 caratteri)';
+            }
+            if (invalidChars.test(name)) {
+                return 'Il nome contiene caratteri non validi: \\ / : * ? " < > |';
+            }
+            if (name === '.' || name === '..') {
+                return 'Nome non valido';
+            }
+            return null;
+        }
+
+        function openRenameModal() {
+            const media = state.media[state.currentMediaIndex];
+            if (!media) return;
+
+            elements.renameCurrentName.textContent = 'Attuale: ' + media.name;
+            elements.renameInput.value = media.name;
+            elements.renameError.textContent = '';
+            elements.renameInput.classList.remove('error');
+            elements.renameConfirm.disabled = false;
+            elements.renameModal.classList.add('active');
+            elements.renameInput.focus();
+            elements.renameInput.select();
+        }
+
+        function closeRenameModal() {
+            elements.renameModal.classList.remove('active');
+            elements.renameError.textContent = '';
+            elements.renameInput.classList.remove('error');
+        }
+
+        async function performRename() {
+            const media = state.media[state.currentMediaIndex];
+            if (!media) return;
+
+            const newName = elements.renameInput.value.trim();
+            const error = validateNewName(newName);
+
+            if (error) {
+                elements.renameError.textContent = error;
+                elements.renameInput.classList.add('error');
+                return;
+            }
+
+            // Check if name is unchanged
+            if (newName === media.name) {
+                closeRenameModal();
+                return;
+            }
+
+            elements.renameConfirm.disabled = true;
+            elements.renameError.textContent = '';
+            elements.renameInput.classList.remove('error');
+
+            try {
+                const response = await fetch('/api/rename', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path: media.path, newName: newName })
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    // Update state with new path
+                    updateFilePath(result.oldPath, result.newPath, newName);
+                    closeRenameModal();
+                } else {
+                    elements.renameError.textContent = result.error || 'Errore durante la rinomina';
+                    elements.renameInput.classList.add('error');
+                    elements.renameConfirm.disabled = false;
+                }
+            } catch (err) {
+                console.error('Errore rinomina:', err);
+                elements.renameError.textContent = 'Errore di rete durante la rinomina';
+                elements.renameInput.classList.add('error');
+                elements.renameConfirm.disabled = false;
+            }
+        }
+
+        function updateFilePath(oldPath, newPath, newName) {
+            // Update state.files
+            const fileIndex = state.files.findIndex(f => f.path === oldPath);
+            if (fileIndex !== -1) {
+                state.files[fileIndex].path = newPath;
+                state.files[fileIndex].name = newName;
+            }
+
+            // Update state.media
+            const mediaIndex = state.media.findIndex(m => m.path === oldPath);
+            if (mediaIndex !== -1) {
+                state.media[mediaIndex].path = newPath;
+                state.media[mediaIndex].name = newName;
+                // Update current index if this is the current file
+                if (mediaIndex === state.currentMediaIndex) {
+                    state.currentMediaIndex = mediaIndex;
+                }
+            }
+
+            // Update renderedFiles Set
+            renderedFiles.delete(oldPath);
+            renderedFiles.add(newPath);
+
+            // Update lightbox display
+            elements.lightboxFilename.textContent = newName;
+            elements.lightboxFilepath.textContent = '📂 ' + newPath;
+
+            // Update gallery DOM
+            const galleryItem = document.querySelector('.gallery-item[data-path="' + oldPath + '"]');
+            if (galleryItem) {
+                galleryItem.dataset.path = newPath;
+                const nameEl = galleryItem.querySelector('.item-name');
+                if (nameEl) {
+                    nameEl.textContent = newName;
+                    nameEl.title = newName;
+                }
+                // Update thumbnail src
+                const thumbImg = galleryItem.querySelector('img');
+                if (thumbImg) {
+                    thumbImg.src = '/thumb/' + encodePath(newPath);
+                    thumbImg.alt = newName;
+                }
+            }
+        }
+
         function closeLightbox() {
             const video = elements.lightboxMedia.querySelector('video');
             if (video) video.pause();
             elements.lightbox.classList.remove('active');
             document.body.style.overflow = '';
+        }
+
+        function toggleOverlay() {
+            state.overlayExpanded = !state.overlayExpanded;
+            if (state.overlayExpanded) {
+                elements.lightboxOverlay.classList.remove('collapsed');
+                elements.lightboxOverlay.classList.add('expanded');
+            } else {
+                elements.lightboxOverlay.classList.remove('expanded');
+                elements.lightboxOverlay.classList.add('collapsed');
+            }
+        }
+
+        function setOverlayExpanded(expanded) {
+            state.overlayExpanded = expanded;
+            if (expanded) {
+                elements.lightboxOverlay.classList.remove('collapsed');
+                elements.lightboxOverlay.classList.add('expanded');
+            } else {
+                elements.lightboxOverlay.classList.remove('expanded');
+                elements.lightboxOverlay.classList.add('collapsed');
+            }
         }
 
         function nextMedia() {
@@ -814,20 +1366,89 @@ const HTMLTemplate = `<!DOCTYPE html>
         elements.lightboxClose.addEventListener('click', closeLightbox);
         elements.lightboxNext.addEventListener('click', (e) => { e.stopPropagation(); nextMedia(); });
         elements.lightboxPrev.addEventListener('click', (e) => { e.stopPropagation(); prevMedia(); });
-        elements.lightbox.addEventListener('click', (e) => { 
-            if (e.target === elements.lightbox || e.target.closest('.lightbox-content') === elements.lightbox.querySelector('.lightbox-content')) {
-                if (e.target.tagName !== 'VIDEO') closeLightbox();
+
+        // Prevent lightbox content area clicks from closing
+        document.querySelector('.lightbox-content').addEventListener('click', (e) => {
+            e.stopPropagation();
+        });
+        elements.rotateCW.addEventListener('click', (e) => { e.stopPropagation(); rotateImage(90); });
+        elements.rotateCCW.addEventListener('click', (e) => { e.stopPropagation(); rotateImage(-90); });
+        elements.renameBtn.addEventListener('click', (e) => { e.stopPropagation(); openRenameModal(); });
+        elements.renameCancel.addEventListener('click', closeRenameModal);
+        elements.renameConfirm.addEventListener('click', performRename);
+        elements.renameModal.addEventListener('click', (e) => {
+            if (e.target === elements.renameModal) closeRenameModal();
+        });
+        elements.renameInput.addEventListener('input', () => {
+            elements.renameError.textContent = '';
+            elements.renameInput.classList.remove('error');
+        });
+        elements.renameInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                performRename();
+            } else if (e.key === 'Escape') {
+                closeRenameModal();
             }
         });
+        elements.lightbox.addEventListener('click', (e) => {
+            // Only close if clicking on the lightbox background itself, not on any interactive elements
+            if (e.target === elements.lightbox) {
+                closeLightbox();
+            }
+        });
+
+        // Prevent overlay clicks from closing the lightbox
+        elements.lightboxOverlay.addEventListener('click', (e) => {
+            e.stopPropagation();
+        });
+        // Toggle overlay on button click
+        elements.lightboxOverlayToggle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleOverlay();
+        });
         document.addEventListener('keydown', (e) => {
+            // Handle F2 for rename - works both in lightbox and gallery
+            if (e.key === 'F2') {
+                e.preventDefault();
+                if (elements.lightbox.classList.contains('active')) {
+                    openRenameModal();
+                } else if (state.media.length > 0 && state.currentMediaIndex < state.media.length) {
+                    // If no lightbox open, open it first with current media
+                    const media = state.media[state.currentMediaIndex];
+                    if (media) {
+                        openLightbox(media.path);
+                        setTimeout(openRenameModal, 100);
+                    }
+                }
+                return;
+            }
+
             if (!elements.lightbox.classList.contains('active')) return;
+
+            // Don't process lightbox shortcuts if rename modal is open
+            if (elements.renameModal.classList.contains('active')) return;
+
             const video = elements.lightboxMedia.querySelector('video');
+            const img = elements.lightboxMedia.querySelector('img');
             if (e.key === 'Escape') closeLightbox();
             else if (e.key === 'ArrowRight') nextMedia();
             else if (e.key === 'ArrowLeft') prevMedia();
             else if (e.key === ' ' && video) {
                 e.preventDefault();
                 video.paused ? video.play() : video.pause();
+            } else if (e.key === 'r' || e.key === 'R') {
+                if (img) {
+                    e.preventDefault();
+                    if (e.shiftKey) {
+                        rotateImage(-90);
+                    } else {
+                        rotateImage(90);
+                    }
+                }
+            } else if (e.key === 'i' || e.key === 'I') {
+                e.preventDefault();
+                toggleOverlay();
             }
         });
 
