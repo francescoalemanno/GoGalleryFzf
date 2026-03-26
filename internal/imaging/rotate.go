@@ -1,6 +1,7 @@
 package imaging
 
 import (
+	"bytes"
 	"fmt"
 	"image"
 	"image/gif"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/dsoprea/go-jpeg-image-structure/v2"
 	_ "golang.org/x/image/webp" // Register WebP decoder
 )
 
@@ -106,7 +108,14 @@ func encodeAndSave(path string, img image.Image, format string) error {
 	var encodeErr error
 	switch strings.ToLower(format) {
 	case "jpeg", "jpg":
-		encodeErr = jpeg.Encode(tempFile, img, &jpeg.Options{Quality: 95})
+		// Encode to buffer first
+		var buf bytes.Buffer
+		encodeErr = jpeg.Encode(&buf, img, &jpeg.Options{Quality: 95})
+		if encodeErr == nil {
+			// Strip EXIF data to remove orientation tag - this ensures the rotated
+			// pixels display correctly without browsers applying additional rotation
+			encodeErr = stripExifAndWrite(&buf, tempFile)
+		}
 	case "png":
 		encodeErr = png.Encode(tempFile, img)
 	case "gif":
@@ -145,6 +154,33 @@ func encodeAndSave(path string, img image.Image, format string) error {
 	}
 
 	return nil
+}
+
+// stripExifAndWrite removes EXIF data from JPEG bytes and writes to the output file.
+// This prevents browsers from applying orientation transforms based on EXIF orientation tags.
+func stripExifAndWrite(buf *bytes.Buffer, out *os.File) error {
+	// Parse the JPEG structure
+	parser := jpegstructure.NewJpegMediaParser()
+	imc, err := parser.ParseBytes(buf.Bytes())
+	if err != nil {
+		// If we can't parse it, just write the original bytes
+		// This handles edge cases where the JPEG might be malformed
+		_, err = out.Write(buf.Bytes())
+		return err
+	}
+
+	sl := imc.(*jpegstructure.SegmentList)
+
+	// Drop EXIF data from the segment list
+	// This removes the orientation tag that causes browsers to apply additional rotation
+	if _, err := sl.DropExif(); err != nil {
+		// If we can't drop EXIF, just write the original bytes
+		_, err = out.Write(buf.Bytes())
+		return err
+	}
+
+	// Write the modified JPEG structure back out
+	return sl.Write(out)
 }
 
 // SupportedImageExts returns the list of supported image extensions for rotation
