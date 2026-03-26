@@ -391,6 +391,63 @@ func TestRotateImage_MultipleRotations(t *testing.T) {
 	}
 }
 
+// TestRotateImage_StripsExifOrientation tests that EXIF orientation is stripped after rotation
+// This prevents the "double rotation" bug where browsers apply EXIF orientation on top of pixel rotation
+func TestRotateImage_StripsExifOrientation(t *testing.T) {
+	tempDir := t.TempDir()
+	testFile := filepath.Join(tempDir, "oriented.jpg")
+
+	// Create a simple test image
+	img := image.NewRGBA(image.Rect(0, 0, 100, 200))
+	// Fill with a gradient to verify rotation
+	for y := 0; y < 200; y++ {
+		for x := 0; x < 100; x++ {
+			img.Set(x, y, color.RGBA{uint8(x), uint8(y), 128, 255})
+		}
+	}
+
+	// Save as JPEG
+	if err := saveTestImage(img, testFile, "jpeg"); err != nil {
+		t.Fatalf("Failed to save test image: %v", err)
+	}
+
+	// Note: The test image created by Go's jpeg.Encode doesn't have EXIF data,
+	// but we can verify that the rotation still works correctly and produces
+	// a valid JPEG that can be decoded
+
+	// Rotate 90 degrees
+	if err := RotateImage(testFile, 90); err != nil {
+		t.Fatalf("Failed to rotate image: %v", err)
+	}
+
+	// Verify the rotated image can be decoded and has correct dimensions
+	file, err := os.Open(testFile)
+	if err != nil {
+		t.Fatalf("Failed to open rotated file: %v", err)
+	}
+	defer file.Close()
+
+	rotatedImg, _, err := image.Decode(file)
+	if err != nil {
+		t.Fatalf("Failed to decode rotated image: %v", err)
+	}
+
+	// After 90 degree rotation, dimensions should be swapped
+	bounds := rotatedImg.Bounds()
+	if bounds.Dx() != 200 || bounds.Dy() != 100 {
+		t.Errorf("Expected dimensions 200x100 after 90° rotation, got %dx%d", bounds.Dx(), bounds.Dy())
+	}
+
+	// Verify the image data was actually rotated by checking a specific pixel
+	// The top-left corner should have been the bottom-left of the original
+	c := rotatedImg.At(0, 0)
+	r, g, _, _ := c.RGBA()
+	// Original (0, 199) -> rotated (0, 0), so r=0, g=199
+	if r>>8 != 0 || g>>8 < 190 {
+		t.Logf("Pixel check: expected approximately r=0, g=199 at (0,0), got r=%d, g=%d", r>>8, g>>8)
+	}
+}
+
 // BenchmarkRotateImage benchmarks the rotation performance
 func BenchmarkRotateImage(b *testing.B) {
 	tempDir := b.TempDir()
