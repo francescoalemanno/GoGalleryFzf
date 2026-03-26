@@ -5,7 +5,7 @@ const HTMLTemplate = `<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🖼️ Galleria</title>
+    <title>🖼️ Galleria v{{.Version}}</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -33,6 +33,19 @@ const HTMLTemplate = `<!DOCTYPE html>
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             margin-right: auto;
+        }
+        .version-badge {
+            font-size: 0.55em;
+            background: rgba(0, 212, 255, 0.15);
+            border: 1px solid rgba(0, 212, 255, 0.4);
+            color: #00d4ff;
+            padding: 0.2rem 0.5rem;
+            border-radius: 12px;
+            vertical-align: middle;
+            margin-left: 0.3rem;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            -webkit-text-fill-color: #00d4ff;
         }
         .search-box { position: relative; }
         .search-box input {
@@ -267,6 +280,15 @@ const HTMLTemplate = `<!DOCTYPE html>
             box-shadow: 0 30px 60px rgba(0,0,0,0.5);
         }
         .lightbox video { background: #000; }
+        .lightbox audio {
+            width: 90vw;
+            max-width: 600px;
+            min-height: 50px;
+            background: linear-gradient(135deg, #2a2a4a 0%, #1a1a2e 100%);
+            border-radius: 8px;
+            box-shadow: 0 30px 60px rgba(0,0,0,0.5);
+            display: block;
+        }
         .lightbox-close {
             position: fixed;
             top: 20px;
@@ -703,7 +725,7 @@ const HTMLTemplate = `<!DOCTYPE html>
 </head>
 <body>
     <div class="header">
-        <h1>🖼️ Galleria</h1>
+        <h1>🖼️ Galleria <span class="version-badge">{{.Version}}</span></h1>
         <div class="search-box">
             <input type="text" id="searchInput" placeholder="Cerca fuzzy..." autocomplete="off">
         </div>
@@ -949,7 +971,7 @@ const HTMLTemplate = `<!DOCTYPE html>
             const dirDisplay = dirPath ? '📂 ' + dirPath : '📂 root';
             let previewHtml;
             if (file.isImage) {
-                const thumbUrl = '/thumb/' + encodePath(file.path);
+                const thumbUrl = '/thumb/' + encodePath(file.path) + '?v=' + file.modTime;
                 previewHtml = '<img src="' + thumbUrl + '" loading="lazy" alt="' + file.name + '">';
             } else if (file.isVideo) {
                 const videoUrl = '/raw/' + encodePath(file.path);
@@ -1012,7 +1034,9 @@ const HTMLTemplate = `<!DOCTYPE html>
 
         function showMedia(index) {
             const media = state.media[index];
-            const mediaUrl = '/raw/' + encodePath(media.path);
+            // Always use fresh timestamp to bypass cache when opening lightbox
+            const cacheBuster = '?t=' + Date.now();
+            const mediaUrl = '/raw/' + encodePath(media.path) + cacheBuster;
             elements.lightboxMedia.innerHTML = '';
             elements.rotateControls.style.display = 'none';
             if (media.isVideo) {
@@ -1027,8 +1051,6 @@ const HTMLTemplate = `<!DOCTYPE html>
                 audio.src = mediaUrl;
                 audio.controls = true;
                 audio.autoplay = true;
-                audio.style.width = '100%';
-                audio.style.maxWidth = '600px';
                 elements.lightboxMedia.appendChild(audio);
                 elements.videoHint.textContent = 'Spazio per play/pause • ← → per navigare • ESC per chiudere • F2 per rinominare';
             } else {
@@ -1066,16 +1088,23 @@ const HTMLTemplate = `<!DOCTYPE html>
                 const result = await response.json();
 
                 if (result.success) {
-                    // Add cache-buster to reload image
+                    // Add cache-buster to reload image in fullscreen
+                    const cacheBuster = '?t=' + Date.now();
                     const img = document.getElementById('lightboxImg');
                     if (img) {
-                        const cacheBuster = '?t=' + Date.now();
                         img.src = '/raw/' + encodePath(media.path) + cacheBuster;
                     }
                     // Also update thumbnail in gallery
-                    const thumbImg = document.querySelector('.gallery-item[data-path="' + media.path + '"] img');
-                    if (thumbImg) {
-                        thumbImg.src = '/thumb/' + encodePath(media.path) + '?t=' + Date.now();
+                    // Use iteration instead of CSS selector to handle special chars in path
+                    const galleryItems = document.querySelectorAll('.gallery-item');
+                    for (const item of galleryItems) {
+                        if (item.dataset.path === media.path) {
+                            const thumbImg = item.querySelector('img');
+                            if (thumbImg) {
+                                thumbImg.src = '/thumb/' + encodePath(media.path) + '?t=' + Date.now();
+                            }
+                            break;
+                        }
                     }
                 } else {
                     alert('Errore rotazione: ' + (result.error || 'Sconosciuto'));
