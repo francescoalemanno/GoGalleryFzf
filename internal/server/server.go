@@ -17,6 +17,7 @@ import (
 	"gallery/internal/fzf"
 	"gallery/internal/imaging"
 	"gallery/internal/models"
+	"gallery/internal/version"
 )
 
 const DefaultPageSize = 100
@@ -308,7 +309,10 @@ func (s *GalleryServer) HandleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tmpl := template.Must(template.New("gallery").Parse(HTMLTemplate))
-	tmpl.Execute(w, nil)
+	data := map[string]string{
+		"Version": version.Version(),
+	}
+	tmpl.Execute(w, data)
 }
 
 func parsePagination(r *http.Request) (page, limit int) {
@@ -535,13 +539,19 @@ func (s *GalleryServer) serveFile(w http.ResponseWriter, r *http.Request, path s
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Accept-Ranges", "bytes")
 
+	// Enable keep-alive for media streaming (video/audio)
+	if isVideoExt(filepath.Ext(fullPath)) || isAudioExt(filepath.Ext(fullPath)) {
+		w.Header().Set("Connection", "keep-alive")
+	}
+
 	// Handle range requests for video/audio streaming
 	rangeHeader := r.Header.Get("Range")
 	if rangeHeader == "" {
 		// No range request - serve entire file
 		w.Header().Set("Content-Length", strconv.FormatInt(stat.Size(), 10))
 		w.WriteHeader(http.StatusOK)
-		io.Copy(w, file)
+		_, err = io.Copy(w, file)
+		// Ignore write errors (client disconnects are common during streaming)
 		return
 	}
 
@@ -559,8 +569,12 @@ func (s *GalleryServer) serveFile(w http.ResponseWriter, r *http.Request, path s
 	w.Header().Set("Content-Length", strconv.FormatInt(contentLength, 10))
 	w.WriteHeader(http.StatusPartialContent)
 
-	file.Seek(start, io.SeekStart)
-	io.CopyN(w, file, contentLength)
+	_, err = file.Seek(start, io.SeekStart)
+	if err != nil {
+		return
+	}
+	_, err = io.CopyN(w, file, contentLength)
+	// Ignore write errors (client disconnects are common during streaming)
 }
 
 func getContentType(ext string) string {
