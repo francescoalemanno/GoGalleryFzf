@@ -1,5 +1,5 @@
 #!/bin/bash
-# Bump version in VERSION.txt and commit
+# Bump version in internal/version/VERSION.txt and commit
 # Usage: ./scripts/bump-version.sh [patch|minor|major|vX.Y.Z]
 
 set -e
@@ -40,11 +40,7 @@ fi
 echo "$NEW_VERSION" > "$VERSION_FILE"
 echo "📝 Version bumped: $CURRENT -> $NEW_VERSION"
 
-# Also update the symlink root file
-cat "$VERSION_FILE" > "$(dirname $0)/../VERSION.txt"
-
 git add "$VERSION_FILE"
-git add "VERSION.txt"
 git commit -m "Bump version to $NEW_VERSION"
 echo "✅ Committed version bump"
 

@@ -1,0 +1,15 @@
+STDOUT
+Let me explore the repository structure and find the relevant files:Let me continue reading the template.go file to see the JavaScript search code:Now I have a complete picture. The issue is that:
+
+1. The streaming search (`/api/search/stream`) streams results as they are found, with high scores going immediately and low scores batched. This breaks the fzf relevance ordering.
+2. The non-streaming `/api/search` endpoint correctly sorts all results by fzf score before returning them.
+
+According to the plan, the first task is to disable streaming search by setting `SSE_SUPPORTED = false`. This will force the frontend to use the non-streaming endpoint that correctly sorts by fzf relevance.
+
+Let me implement this fix:Now let me update the plan to mark Phase 1 as complete:Let me verify the change and run the tests to make sure everything still works:The change is working. Now let me verify the complete flow is correct and write a feedback note for the next iteration:Now let me create the feedback file for the next iteration:Let me verify the current state of the plan:Phase 1 is complete. The streaming search has been disabled by setting `SSE_SUPPORTED = false`, which forces the frontend to use the non-streaming `/api/search` endpoint that correctly sorts results by fzf relevance.
+
+The plan still has unchecked tasks in Phase 2, 3, and 4. The next priority is Phase 2: verifying that the non-streaming search correctly sorts results by fzf relevance.
+
+<promise>CONTINUE</promise>
+
+STDERR
